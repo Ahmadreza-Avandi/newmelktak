@@ -1,101 +1,118 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
-import { User, Tenant } from "../types/index.js";
-import {
-  api,
-  getStoredToken,
-  getStoredUser,
-  getStoredTenant,
-  setStoredSession,
-  clearStoredSession
-} from "../services/api.js";
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { api } from "../services/apiClient.ts";
+import type { Tenant, User } from "../types/index.ts";
 
-interface AuthContextType {
+export interface AuthContextValue {
   user: User | null;
   tenant: Tenant | null;
-  token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (credentials: { agency_code: string; username: string; password: string }) => Promise<{ success: boolean; error?: string }>;
-  logout: () => Promise<void>;
-  refreshUser: () => Promise<void>;
+  login: (
+    agency_code: string,
+    username: string,
+    password: string
+  ) => Promise<{ success: boolean; error?: string }>;
+  logout: () => Promise<{ success: boolean; error?: string }>;
+  refreshAuth: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+export const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [token, setToken] = useState<string | null>(getStoredToken());
-  const [user, setUser] = useState<User | null>(getStoredUser());
-  const [tenant, setTenant] = useState<Tenant | null>(getStoredTenant());
+  const [user, setUser] = useState<User | null>(null);
+  const [tenant, setTenant] = useState<Tenant | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  const refreshUser = async () => {
-    if (!getStoredToken()) {
-      setIsLoading(false);
-      return;
-    }
+  const refreshAuth = useCallback(async () => {
     try {
-      const res = await api.getMe();
-      if (res.success && res.data) {
-        setUser(res.data.user);
-        setTenant(res.data.tenant);
-        localStorage.setItem("amlak_user", JSON.stringify(res.data.user));
-        localStorage.setItem("amlak_tenant", JSON.stringify(res.data.tenant));
+      const response = await api.get<{
+        authenticated?: boolean;
+        user: User | null;
+        tenant: Tenant | null;
+      }>("/api/v1/auth/session");
+      if (
+        response.success &&
+        response.data?.authenticated &&
+        response.data.user &&
+        response.data.tenant
+      ) {
+        setUser(response.data.user);
+        setTenant(response.data.tenant);
       } else {
-        clearStoredSession();
-        setToken(null);
+        api.setToken(null);
         setUser(null);
         setTenant(null);
       }
     } catch {
-      // keep offline/local state if available
+      setUser(null);
+      setTenant(null);
     } finally {
       setIsLoading(false);
     }
-  };
-
-  useEffect(() => {
-    refreshUser();
-
-    const handleUnauthorized = () => {
-      setToken(null);
-      setUser(null);
-      setTenant(null);
-    };
-
-    window.addEventListener("amlak:unauthorized", handleUnauthorized);
-    return () => window.removeEventListener("amlak:unauthorized", handleUnauthorized);
   }, []);
 
-  const login = async (credentials: { agency_code: string; username: string; password: string }) => {
+  useEffect(() => {
+    api.onUnauthorized(() => {
+      setUser(null);
+      setTenant(null);
+    });
+    refreshAuth();
+  }, [refreshAuth]);
+
+  const login = async (agency_code: string, username: string, password: string) => {
+    setIsLoading(true);
     try {
-      const res = await api.login(credentials);
-      if (res.success && res.data) {
-        setStoredSession(res.data.token, res.data.user, res.data.tenant);
-        setToken(res.data.token);
-        setUser(res.data.user);
-        setTenant(res.data.tenant);
+      const response = await api.post<{ token: string; user: User; tenant: Tenant }>(
+        "/api/v1/auth/login",
+        { agency_code, username, password }
+      );
+      if (response.success && response.data) {
+        api.setToken(response.data.token);
+        setUser(response.data.user);
+        setTenant(response.data.tenant);
+        setIsLoading(false);
         return { success: true };
       }
+      setIsLoading(false);
       return {
         success: false,
-        error: res.error?.message || "ورود ناموفق بود. لطفاً اطلاعات را بررسی کنید."
+        error: response.error?.message || "کد آژانس، نام کاربری یا رمز عبور اشتباه است.",
       };
-    } catch (err: any) {
-      return { success: false, error: err.message || "خطا در برقراری ارتباط." };
+    } catch {
+      setIsLoading(false);
+      return {
+        success: false,
+        error: "ارتباط با سرور برقرار نشد. لطفاً وضعیت اینترنت را بررسی فرمایید.",
+      };
     }
   };
 
   const logout = async () => {
+    setIsLoading(true);
+    let errorMessage: string | undefined;
     try {
-      await api.logout();
-    } catch {
-      // ignore
+      const response = await api.post("/api/v1/auth/logout");
+      if (!response.success) {
+        errorMessage = response.error?.message || "خطا در فرآیند خروج از سامانه.";
+      }
+    } catch (error) {
+      console.error("Logout error:", error);
+      errorMessage = "ارتباط با سرور برقرار نشد.";
     } finally {
-      clearStoredSession();
-      setToken(null);
+      api.setToken(null);
+      if (typeof window !== "undefined") {
+        try {
+          sessionStorage.clear();
+          localStorage.clear();
+        } catch {
+          // Ignore storage errors
+        }
+      }
       setUser(null);
       setTenant(null);
+      setIsLoading(false);
     }
+    return { success: !errorMessage, error: errorMessage };
   };
 
   return (
@@ -103,12 +120,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         tenant,
-        token,
-        isAuthenticated: !!token && !!user,
+        isAuthenticated: !!user,
         isLoading,
         login,
         logout,
-        refreshUser
+        refreshAuth,
       }}
     >
       {children}
@@ -116,10 +132,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 };
 
-export function useAuth() {
+export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
   if (!context) {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
+}
+
+export function useOfficeAdmin(): boolean {
+  const { user } = useAuth();
+  return ["ADMIN", "OWNER"].includes(user?.role_code || "");
 }
