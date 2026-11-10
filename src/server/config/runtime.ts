@@ -25,6 +25,12 @@ export function getPlatformCredentials(env = process.env) {
 export function validateRuntimeConfig() {
   getPlatformPath();
   getPlatformCredentials();
+  if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is required in production; configure a PostgreSQL database.');
+  }
+  if (process.env.DATABASE_URL && !/^postgres(?:ql)?:\/\//i.test(process.env.DATABASE_URL)) {
+    throw new Error('DATABASE_URL must use the PostgreSQL protocol.');
+  }
   if (process.env.NODE_ENV === 'production' && process.env.SEED_DEMO_DATA === 'true') {
     throw new Error('Demo seeding is not allowed in production.');
   }

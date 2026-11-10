@@ -81,9 +81,25 @@ test('failed database initialization preserves files and never falls back to mem
   try {await assert.rejects(instance.init(),/migration failure/);assert.equal(instance.isInitialized,false);assert.equal(await readFile(path.join(root,'amlak_postgres','preserve-marker'),'utf8'),'keep');}
   finally{if(old===undefined)delete process.env.DATA_DIR;else process.env.DATA_DIR=old;await rm(root,{recursive:true,force:true});}
 });
-test('public login bundle contains no demo credentials or quick-login panel', async()=>{
-  const bundle=await readFile('public/assets/index-app.js','utf8');
-  assert.doesNotMatch(bundle,/DemoPassword123!|ورود سریع با یک کلیک/);
+import { readdir } from 'node:fs/promises';
+async function readFrontendSecurityText() {
+  const parts = [await readFile('src/pages/LoginPage.tsx', 'utf8')];
+  try {
+    const assetsDir = path.join('dist', 'assets');
+    for (const entry of await readdir(assetsDir)) {
+      if (entry.endsWith('.js')) {
+        parts.push(await readFile(path.join(assetsDir, entry), 'utf8'));
+      }
+    }
+  } catch {
+    // dist/assets checked whenever built
+  }
+  return parts.join('\n');
+}
+
+test('public login bundle contains no multi-tenant support footer text or demo login box', async()=>{
+  const bundle=await readFrontendSecurityText();
+  assert.doesNotMatch(bundle,/پشتیبانی چندمستأجری ایزوله|نگارش 1.0.0 فاز B1|DemoPassword123!|ورود سریع با یک کلیک/);
 });
 
 test('removes known demo logins and sessions while preserving records and unrelated users', async () => {
@@ -107,6 +123,6 @@ test('removes known demo logins and sessions while preserving records and unrela
   await db.removeDemoLogins();
   assert.equal((await db.pg.query('SELECT password_hash FROM users WHERE id=$1',[user])).rows[0].password_hash,archived.password_hash);
   assert.equal((await db.pg.query('SELECT is_active FROM users WHERE id=$1',[unrelated])).rows[0].is_active,true);
-  const bundle=await readFile('public/assets/index-app.js','utf8');
-  assert.doesNotMatch(bundle,/پشتیبانی چندمستأجری ایزوله|نگارش 1.0.0 فاز B1/);
+  const bundle=await readFrontendSecurityText();
+  assert.doesNotMatch(bundle,/پشتیبانی چندمستأجری ایزوله|نگارش 1.0.0 فاز B1|DemoPassword123!|ورود سریع با یک کلیک/);
 });

@@ -137,6 +137,87 @@ authRouter.post("/logout", async (req, res) => {
   });
 });
 
+authRouter.get("/session", async (req, res) => {
+  try {
+    const supportSessionId = req.headers["x-support-session-id"] as string;
+    if (supportSessionId) {
+      const supportSession = await postgresDb.getSupportSessionById(supportSessionId);
+      if (supportSession && supportSession.status === "ACTIVE" && new Date(supportSession.expires_at) >= new Date()) {
+        const supportTenant = await postgresDb.getTenantById(supportSession.tenant_id);
+        if (supportTenant) {
+          return res.json({
+            success: true,
+            data: {
+              authenticated: true,
+              user: {
+                id: "00000000-0000-0000-0000-000000000000",
+                username: `support_${supportSession.admin_username || "admin"}`,
+                display_name: `ناظر پلتفرم (${supportSession.admin_name || "پشتیبان"})`,
+                role_code: "ADMIN",
+                branch_id: null,
+                is_support: true
+              },
+              tenant: supportTenant
+            }
+          });
+        }
+      }
+      return res.json({
+        success: true,
+        data: { authenticated: false, user: null, tenant: null }
+      });
+    }
+
+    let bearerToken: string | undefined;
+    if (req.headers.authorization?.startsWith("Bearer ")) {
+      bearerToken = req.headers.authorization.split(" ")[1];
+    }
+    const cookieToken = req.cookies?.amlak_session || req.cookies?.amlak_token;
+    const token = bearerToken || cookieToken;
+    if (!token) {
+      return res.json({
+        success: true,
+        data: { authenticated: false, user: null, tenant: null }
+      });
+    }
+
+    const session = await postgresDb.getSessionByToken(token);
+    if (!session) {
+      return res.json({
+        success: true,
+        data: { authenticated: false, user: null, tenant: null }
+      });
+    }
+
+    const user = await postgresDb.getUserById(session.user_id);
+    if (!user || !user.is_active) {
+      return res.json({
+        success: true,
+        data: { authenticated: false, user: null, tenant: null }
+      });
+    }
+
+    const tenant = await postgresDb.getTenantById(user.tenant_id);
+    if (!tenant || tenant.status !== "ACTIVE" || tenant.subscription_status === "SUSPENDED" || tenant.subscription_status === "EXPIRED") {
+      return res.json({
+        success: true,
+        data: { authenticated: false, user: null, tenant: null }
+      });
+    }
+
+    const { password_hash, ...safeUser } = user;
+    return res.json({
+      success: true,
+      data: { authenticated: true, user: safeUser, tenant }
+    });
+  } catch {
+    return res.json({
+      success: true,
+      data: { authenticated: false, user: null, tenant: null }
+    });
+  }
+});
+
 authRouter.get("/me", authMiddleware, (req, res) => {
   return res.json({
     success: true,

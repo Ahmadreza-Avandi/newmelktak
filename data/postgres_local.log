@@ -1,0 +1,35 @@
+2026-11-07 16:14:51.339 +0330 [16] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-07 16:14:51.339 +0330 [16] LOG:  could not create IPv4 socket for address "127.0.0.1": Operation not permitted
+2026-11-07 16:14:51.339 +0330 [16] WARNING:  could not create listen socket for "127.0.0.1"
+2026-11-07 16:14:51.339 +0330 [16] FATAL:  could not create any TCP/IP sockets
+2026-11-07 16:14:51.341 +0330 [16] LOG:  database system is shut down
+2026-11-07 16:15:03.619 +0330 [4] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-07 16:15:03.619 +0330 [4] LOG:  could not bind Unix address "/tmp/.s.PGSQL.5432": Operation not permitted
+2026-11-07 16:15:03.619 +0330 [4] WARNING:  could not create Unix-domain socket in directory "/tmp"
+2026-11-07 16:15:03.619 +0330 [4] FATAL:  could not create any Unix-domain sockets
+2026-11-07 16:15:03.621 +0330 [4] LOG:  database system is shut down
+2026-11-07 16:15:26.793 +0330 [84252] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-07 16:15:26.793 +0330 [84252] LOG:  could not bind IPv4 address "127.0.0.1": Address already in use
+2026-11-07 16:15:26.793 +0330 [84252] HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
+2026-11-07 16:15:26.793 +0330 [84252] WARNING:  could not create listen socket for "127.0.0.1"
+2026-11-07 16:15:26.793 +0330 [84252] FATAL:  could not create any TCP/IP sockets
+2026-11-07 16:15:26.794 +0330 [84252] LOG:  database system is shut down
+2026-11-07 16:15:38.653 +0330 [84434] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-07 16:15:38.653 +0330 [84434] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+2026-11-07 16:15:38.654 +0330 [84434] FATAL:  could not create lock file "/run/postgresql/.s.PGSQL.55432.lock": Permission denied
+2026-11-07 16:15:38.655 +0330 [84434] LOG:  database system is shut down
+2026-11-07 16:15:49.160 +0330 [84606] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-07 16:15:49.160 +0330 [84606] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+2026-11-07 16:15:49.161 +0330 [84606] LOG:  listening on Unix socket "/home/ahmad/Downloads/newmelktak2/data/postgres_sockets/.s.PGSQL.55432"
+2026-11-07 16:15:49.164 +0330 [84612] LOG:  database system was shut down at 2026-11-07 16:15:18 +0330
+2026-11-07 16:15:49.167 +0330 [84606] LOG:  database system is ready to accept connections
+2026-11-07 16:20:49.264 +0330 [84610] LOG:  checkpoint starting: time
+2026-11-07 16:22:37.004 +0330 [84610] LOG:  checkpoint complete: wrote 1075 buffers (6.6%), wrote 3 SLRU buffers; 1 WAL file(s) added, 0 removed, 0 recycled; write=107.699 s, sync=0.017 s, total=107.740 s; sync files=454, longest=0.006 s, average=0.001 s; distance=5817 kB, estimate=5817 kB; lsn=0/1D14A70, redo lsn=0/1D149E0
+2026-11-07 16:30:49.157 +0330 [84610] LOG:  checkpoint starting: time
+2026-11-07 16:30:53.679 +0330 [84610] LOG:  checkpoint complete: wrote 45 buffers (0.3%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=4.512 s, sync=0.003 s, total=4.522 s; sync files=27, longest=0.002 s, average=0.001 s; distance=8 kB, estimate=5236 kB; lsn=0/1D16A90, redo lsn=0/1D16A00
+2026-11-07 16:32:35.615 +0330 [84606] LOG:  received smart shutdown request
+2026-11-07 16:32:35.661 +0330 [84606] LOG:  background worker "logical replication launcher" (PID 84615) exited with exit code 1
+2026-11-07 16:32:35.661 +0330 [84610] LOG:  shutting down
+2026-11-07 16:32:35.662 +0330 [84610] LOG:  checkpoint starting: shutdown immediate
+2026-11-07 16:32:35.672 +0330 [84610] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.012 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=4712 kB; lsn=0/1D16B40, redo lsn=0/1D16B40
+2026-11-07 16:32:35.765 +0330 [84606] LOG:  database system is shut down

@@ -1,0 +1,20 @@
+2026-11-10 19:02:56.482 +0330 [81825] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-10 19:02:56.482 +0330 [81825] LOG:  could not bind IPv4 address "127.0.0.1": Address already in use
+2026-11-10 19:02:56.482 +0330 [81825] HINT:  Is another postmaster already running on port 5432? If not, wait a few seconds and retry.
+2026-11-10 19:02:56.482 +0330 [81825] WARNING:  could not create listen socket for "127.0.0.1"
+2026-11-10 19:02:56.483 +0330 [81825] FATAL:  could not create any TCP/IP sockets
+2026-11-10 19:02:56.484 +0330 [81825] LOG:  database system is shut down
+2026-11-10 19:04:22.805 +0330 [5] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-10 19:04:22.805 +0330 [5] LOG:  could not create IPv4 socket for address "127.0.0.1": Operation not permitted
+2026-11-10 19:04:22.805 +0330 [5] WARNING:  could not create listen socket for "127.0.0.1"
+2026-11-10 19:04:22.805 +0330 [5] FATAL:  could not create any TCP/IP sockets
+2026-11-10 19:04:22.807 +0330 [5] LOG:  database system is shut down
+2026-11-10 19:04:43.453 +0330 [83323] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-10 19:04:43.453 +0330 [83323] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+2026-11-10 19:04:43.455 +0330 [83323] LOG:  listening on Unix socket "/home/ahmad/Downloads/newmelktak2/data/postgres_local/.s.PGSQL.55432"
+2026-11-10 19:04:43.459 +0330 [83329] LOG:  database system was shut down at 2026-11-07 16:32:35 +0330
+2026-11-10 19:04:43.464 +0330 [83323] LOG:  database system is ready to accept connections
+2026-11-10 19:09:43.553 +0330 [83327] LOG:  checkpoint starting: time
+2026-11-10 19:09:43.971 +0330 [83327] LOG:  checkpoint complete: wrote 4 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.403 s, sync=0.007 s, total=0.419 s; sync files=4, longest=0.006 s, average=0.002 s; distance=29 kB, estimate=29 kB; lsn=0/1D1E048, redo lsn=0/1D1DFD8
+2026-11-10 19:19:44.073 +0330 [83327] LOG:  checkpoint starting: time
+2026-11-10 19:19:44.186 +0330 [83327] LOG:  checkpoint complete: wrote 1 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.102 s, sync=0.004 s, total=0.113 s; sync files=2, longest=0.003 s, average=0.002 s; distance=5 kB, estimate=26 kB; lsn=0/1D1F730, redo lsn=0/1D1F6D8

@@ -1,6 +1,5 @@
-const CACHE_NAME = 'melktak-pwa-v9';
+const CACHE_NAME = 'melktak-pwa-v10';
 const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/registerSW.js',
-  '/assets/management-ui.js', '/assets/management-ui.css', '/assets/index-app.js', '/assets/crm-workflows.js', '/assets/index-app.css',
   '/icons/icon-192.png', '/icons/icon-512.png'];
 const SHELL_PATHS = new Set(SHELL);
  
