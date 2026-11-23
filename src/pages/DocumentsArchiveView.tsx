@@ -95,7 +95,7 @@ export const DocumentsArchiveView: React.FC<DocumentsArchiveViewProps> = ({
     setDocumentError("");
     try {
       const res = await api.get(
-        `/api/v1/documents/all?include_archived=${includeArchived}`
+        `/api/v1/documents/all?include_archived=${includeArchived}`,
       );
       if (!res.success) {
         throw new Error(res.error?.message || "دریافت اسناد انجام نشد.");
@@ -163,7 +163,7 @@ export const DocumentsArchiveView: React.FC<DocumentsArchiveViewProps> = ({
           doc.description?.toLowerCase().includes(q)
         );
       }),
-    [documents, search, docTypeFilter, entityFilter]
+    [documents, search, docTypeFilter, entityFilter],
   );
 
   const handleFileChange = (ev: React.ChangeEvent<HTMLInputElement>) => {
@@ -194,10 +194,7 @@ export const DocumentsArchiveView: React.FC<DocumentsArchiveViewProps> = ({
       const formData = new FormData();
       formData.append("file", selectedFile);
       formData.append("document_type", docType);
-      formData.append(
-        "display_name",
-        displayName.trim() || selectedFile.name
-      );
+      formData.append("display_name", displayName.trim() || selectedFile.name);
       if (description.trim()) {
         formData.append("description", description.trim());
       }
@@ -223,7 +220,7 @@ export const DocumentsArchiveView: React.FC<DocumentsArchiveViewProps> = ({
       }
     } catch (err: any) {
       setUploadError(
-        err?.message || "ارتباط با سرور برای بارگذاری برقرار نشد."
+        err?.message || "ارتباط با سرور برای بارگذاری برقرار نشد.",
       );
     } finally {
       setUploading(false);
@@ -488,7 +485,9 @@ export const DocumentsArchiveView: React.FC<DocumentsArchiveViewProps> = ({
                     required={true}
                     className="w-full bg-[#F7F9FC] border border-slate-300 rounded-xl p-2 text-xs font-medium text-slate-800 outline-none focus:border-[#145DB5]"
                   >
-                    <option value="">-- لطفاً متقاضی را انتخاب نمایید --</option>
+                    <option value="">
+                      -- لطفاً متقاضی را انتخاب نمایید --
+                    </option>
                     {customerChoices.map((cust) => (
                       <option key={cust.id} value={cust.id}>
                         {cust.display_name} - {cust.phone}
@@ -587,7 +586,7 @@ export const DocumentsArchiveView: React.FC<DocumentsArchiveViewProps> = ({
             </button>
             {Object.entries(ARCHIVE_DOC_META).map(([key, meta]) => {
               const count = documents.filter(
-                (doc) => doc.document_type === key
+                (doc) => doc.document_type === key,
               ).length;
               return (
                 <button
@@ -849,11 +848,7 @@ export const DocumentsArchiveView: React.FC<DocumentsArchiveViewProps> = ({
             <div className="p-4 overflow-y-auto flex-1 flex items-center justify-center bg-slate-100 min-h-[240px]">
               {isImageFile(previewDoc.mime_type, previewDoc.file_name) ? (
                 <img
-                  src={`/api/v1/documents/${previewDoc.id}/download${
-                    api.getToken()
-                      ? `?token=${encodeURIComponent(api.getToken()!)}`
-                      : ""
-                  }${includeArchived ? "&allow_archived=true" : ""}`}
+                  src={`/api/v1/documents/${previewDoc.id}/download${includeArchived ? "?allow_archived=true" : ""}`}
                   alt={previewDoc.display_name}
                   className="max-h-[62vh] max-w-full rounded-lg object-contain shadow-md"
                 />

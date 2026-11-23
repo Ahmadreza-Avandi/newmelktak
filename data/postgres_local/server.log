@@ -18,3 +18,40 @@
 2026-11-10 19:09:43.971 +0330 [83327] LOG:  checkpoint complete: wrote 4 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.403 s, sync=0.007 s, total=0.419 s; sync files=4, longest=0.006 s, average=0.002 s; distance=29 kB, estimate=29 kB; lsn=0/1D1E048, redo lsn=0/1D1DFD8
 2026-11-10 19:19:44.073 +0330 [83327] LOG:  checkpoint starting: time
 2026-11-10 19:19:44.186 +0330 [83327] LOG:  checkpoint complete: wrote 1 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.102 s, sync=0.004 s, total=0.113 s; sync files=2, longest=0.003 s, average=0.002 s; distance=5 kB, estimate=26 kB; lsn=0/1D1F730, redo lsn=0/1D1F6D8
+2026-11-20 13:47:00.449 +0330 [89564] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-20 13:47:00.449 +0330 [89564] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+2026-11-20 13:47:00.450 +0330 [89564] LOG:  listening on Unix socket "/home/ahmad/Downloads/newmelktak2/data/postgres_local/.s.PGSQL.55432"
+2026-11-20 13:47:00.455 +0330 [89570] LOG:  database system was interrupted; last known up at 2026-11-10 19:19:44 +0330
+2026-11-20 13:47:00.511 +0330 [89570] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-11-20 13:47:00.513 +0330 [89570] LOG:  redo starts at 0/1D1F6D8
+2026-11-20 13:47:00.513 +0330 [89570] LOG:  invalid record length at 0/1D1F7E0: expected at least 24, got 0
+2026-11-20 13:47:00.514 +0330 [89570] LOG:  redo done at 0/1D1F7A8 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-11-20 13:47:00.517 +0330 [89568] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-11-20 13:47:00.530 +0330 [89568] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.003 s, total=0.014 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1D1F7E0, redo lsn=0/1D1F7E0
+2026-11-20 13:47:00.533 +0330 [89564] LOG:  database system is ready to accept connections
+2026-11-20 13:56:11.240 +0330 [89564] LOG:  received smart shutdown request
+2026-11-20 13:56:11.243 +0330 [89564] LOG:  background worker "logical replication launcher" (PID 89574) exited with exit code 1
+2026-11-20 13:56:11.243 +0330 [89568] LOG:  shutting down
+2026-11-20 13:56:11.244 +0330 [89568] LOG:  checkpoint starting: shutdown immediate
+2026-11-20 13:56:11.253 +0330 [89568] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.010 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1D1F890, redo lsn=0/1D1F890
+2026-11-20 13:56:11.274 +0330 [89564] LOG:  database system is shut down
+2026-11-21 21:10:07.617 +0330 [10224] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-21 21:10:07.618 +0330 [10224] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+2026-11-21 21:10:07.619 +0330 [10224] LOG:  listening on Unix socket "/home/ahmad/Downloads/newmelktak2/data/postgres_local/.s.PGSQL.55432"
+2026-11-21 21:10:07.624 +0330 [10230] LOG:  database system was shut down at 2026-11-20 13:56:11 +0330
+2026-11-21 21:10:07.628 +0330 [10224] LOG:  database system is ready to accept connections
+2026-11-21 21:15:07.723 +0330 [10228] LOG:  checkpoint starting: time
+2026-11-21 21:15:07.733 +0330 [10228] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.011 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1D1F998, redo lsn=0/1D1F940
+2026-11-21 21:30:07.373 +0330 [10224] LOG:  received smart shutdown request
+2026-11-21 21:30:07.407 +0330 [10224] LOG:  background worker "logical replication launcher" (PID 10233) exited with exit code 1
+2026-11-21 21:30:07.427 +0330 [10228] LOG:  shutting down
+2026-11-21 21:30:07.429 +0330 [10228] LOG:  checkpoint starting: shutdown immediate
+2026-11-21 21:30:07.438 +0330 [10228] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.011 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1D1FA48, redo lsn=0/1D1FA48
+2026-11-21 21:30:07.453 +0330 [10224] LOG:  database system is shut down
+2026-11-23 20:54:54.508 +0330 [14547] LOG:  starting PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 16.2.1 20260810, 64-bit
+2026-11-23 20:54:54.508 +0330 [14547] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+2026-11-23 20:54:54.510 +0330 [14547] LOG:  listening on Unix socket "/home/ahmad/Downloads/newmelktak2/data/postgres_local/.s.PGSQL.55432"
+2026-11-23 20:54:54.514 +0330 [14553] LOG:  database system was shut down at 2026-11-21 21:30:07 +0330
+2026-11-23 20:54:54.518 +0330 [14547] LOG:  database system is ready to accept connections
+2026-11-23 20:59:54.591 +0330 [14551] LOG:  checkpoint starting: time
+2026-11-23 20:59:54.619 +0330 [14551] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.003 s, sync=0.001 s, total=0.029 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1D1FB50, redo lsn=0/1D1FAF8

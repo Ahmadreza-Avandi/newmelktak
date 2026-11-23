@@ -60,7 +60,7 @@ export const EntityDocumentsPanel: React.FC<{
   const [previewDoc, setPreviewDoc] = useState<any | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [docType, setDocType] = useState(
-    entityType === "property" ? "DEED" : "IDENTITY"
+    entityType === "property" ? "DEED" : "IDENTITY",
   );
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
@@ -105,7 +105,7 @@ export const EntityDocumentsPanel: React.FC<{
           doc.description?.toLowerCase().includes(q);
         return matchesType && matchesQuery;
       }),
-    [docs, search, filterType]
+    [docs, search, filterType],
   );
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -159,7 +159,7 @@ export const EntityDocumentsPanel: React.FC<{
       }
     } catch (err: any) {
       setUploadError(
-        err?.message || "ارتباط با سرور برای بارگذاری برقرار نشد."
+        err?.message || "ارتباط با سرور برای بارگذاری برقرار نشد.",
       );
     } finally {
       setUploading(false);
@@ -257,10 +257,14 @@ export const EntityDocumentsPanel: React.FC<{
                 className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-medium text-slate-800 outline-none focus:border-[#145DB5]"
               >
                 <option value="DEED">تصویر سند مالکیت (تک‌برگ / بنچاق)</option>
-                <option value="CONTRACT">قولنامه / مبایعه‌نامه / اجاره‌نامه</option>
+                <option value="CONTRACT">
+                  قولنامه / مبایعه‌نامه / اجاره‌نامه
+                </option>
                 <option value="IDENTITY">کارت شناسایی و هویتی</option>
                 <option value="FINANCIAL">اسناد مالی / چک / فیش واریزی</option>
-                <option value="PERMIT">پایان‌کار / پروانه ساخت / استعلام شهرداری</option>
+                <option value="PERMIT">
+                  پایان‌کار / پروانه ساخت / استعلام شهرداری
+                </option>
                 <option value="POWER_OF_ATTORNEY">
                   وکالت‌نامه / انحصار وراثت / حقوقی
                 </option>
@@ -370,7 +374,7 @@ export const EntityDocumentsPanel: React.FC<{
             </button>
             {Object.entries(DOCUMENT_TYPE_META).map(([typeKey, meta]) => {
               const count = docs.filter(
-                (item) => item.document_type === typeKey
+                (item) => item.document_type === typeKey,
               ).length;
               if (count === 0) return null;
               return (
@@ -517,11 +521,7 @@ export const EntityDocumentsPanel: React.FC<{
             <div className="p-4 overflow-y-auto flex-1 flex items-center justify-center bg-slate-100 min-h-[220px]">
               {isImage(previewDoc.mime_type, previewDoc.file_name) ? (
                 <img
-                  src={`/api/v1/documents/${previewDoc.id}/download${
-                    api.getToken()
-                      ? `?token=${encodeURIComponent(api.getToken()!)}`
-                      : ""
-                  }`}
+                  src={`/api/v1/documents/${previewDoc.id}/download`}
                   alt={previewDoc.display_name}
                   className="max-h-[60vh] max-w-full rounded-lg object-contain shadow-md"
                 />
