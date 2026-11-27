@@ -1,8 +1,10 @@
 import React from "react";
 import {
+  Bell,
   Building,
   Building2,
   ChartColumn,
+  Cloud,
   Ellipsis,
   FileText,
   Handshake,
@@ -15,6 +17,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext.tsx";
 import { canOpenModule } from "../management/ManagementUI.tsx";
+import type { SyncStatusState } from "../../services/offlineSync.ts";
 
 export const MelktakSidebar: React.FC<{
   activeTab: string;
@@ -23,6 +26,11 @@ export const MelktakSidebar: React.FC<{
   overdueCount?: number;
   activeModule?: string;
   onOpenModule: (module: string) => void;
+  unreadNotificationsCount?: number;
+  syncStatus?: SyncStatusState | null;
+  isOfflineMode?: boolean;
+  onOpenNotifications?: () => void;
+  onOpenSyncModal?: () => void;
 }> = ({
   activeTab,
   onSelectTab,
@@ -30,8 +38,18 @@ export const MelktakSidebar: React.FC<{
   overdueCount = 0,
   activeModule = "hub",
   onOpenModule,
+  unreadNotificationsCount = 0,
+  syncStatus,
+  isOfflineMode = false,
+  onOpenNotifications,
+  onOpenSyncModal,
 }) => {
   const { user, tenant, logout } = useAuth();
+  const pendingOrIssue =
+    (syncStatus?.pendingCount || 0) +
+    (syncStatus?.failedCount || 0) +
+    (syncStatus?.conflictCount || 0);
+  const offlineState = isOfflineMode || (syncStatus ? !syncStatus.isOnline : false);
   const roleTitle =
     (user?.role_code as string) === "SUPER_ADMIN"
       ? "مدیر ارشد سامانه"
@@ -356,6 +374,44 @@ export const MelktakSidebar: React.FC<{
         </div>
       </div>
       <div className="p-3 border-t border-slate-100 space-y-2 shrink-0 bg-slate-50/50">
+        {(onOpenNotifications || onOpenSyncModal) && (
+          <div className="grid grid-cols-2 gap-1.5">
+            {onOpenNotifications && (
+              <button
+                type="button"
+                onClick={onOpenNotifications}
+                className="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 text-[11px] font-bold text-slate-700 hover:border-[#145DB5] hover:text-[#145DB5] transition cursor-pointer"
+              >
+                <span className="flex items-center gap-1">
+                  <Bell className="w-3.5 h-3.5 text-[#145DB5]" />
+                  <span>اعلان‌ها</span>
+                </span>
+                {unreadNotificationsCount > 0 && (
+                  <span className="bg-rose-600 text-white rounded-full text-[9px] font-black px-1.5 py-0.2">
+                    {unreadNotificationsCount}
+                  </span>
+                )}
+              </button>
+            )}
+            {onOpenSyncModal && (
+              <button
+                type="button"
+                onClick={onOpenSyncModal}
+                className="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 text-[11px] font-bold text-slate-700 hover:border-[#145DB5] hover:text-[#145DB5] transition cursor-pointer"
+              >
+                <span className="flex items-center gap-1">
+                  <Cloud className="w-3.5 h-3.5 text-[#145DB5]" />
+                  <span>همگام‌سازی</span>
+                </span>
+                {pendingOrIssue > 0 && (
+                  <span className="bg-amber-600 text-white rounded-full text-[9px] font-black px-1.5 py-0.2">
+                    {pendingOrIssue}
+                  </span>
+                )}
+              </button>
+            )}
+          </div>
+        )}
         <div className="flex items-center justify-between p-2 rounded-xl bg-white border border-slate-100 shadow-2xs">
           <div className="flex-1 min-w-0 pr-1">
             <p className="text-xs font-bold text-[#172033] truncate">
@@ -372,12 +428,16 @@ export const MelktakSidebar: React.FC<{
             <X className="w-4 h-4" />
           </button>
         </div>
-        <div className="flex items-center justify-between text-[10px] text-slate-400 px-1">
+        <div className="flex items-center justify-between text-[10px] text-slate-500 px-1">
           <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>متصل به سرور</span>
+            <span
+              className={`w-2 h-2 rounded-full ${
+                offlineState ? "bg-amber-500" : "bg-emerald-500 animate-pulse"
+              }`}
+            />
+            <span>{offlineState ? "حالت آفلاین" : "متصل به سرور"}</span>
           </div>
-          <span>ملک تک ویندوز</span>
+          <span>ملک تک</span>
         </div>
       </div>
     </aside>

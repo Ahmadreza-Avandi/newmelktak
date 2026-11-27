@@ -14,7 +14,19 @@ export function getPlatformPath(env = process.env): string {
 export function getPlatformCredentials(env = process.env) {
   const username = env.PLATFORM_ADMIN_USERNAME?.trim().toLowerCase();
   const password = env.PLATFORM_ADMIN_PASSWORD;
-  if (!username && !password && env.NODE_ENV !== 'production') return null;
+  if (env.NODE_ENV !== 'production') {
+    if (
+      !username ||
+      !/^[a-z0-9_.-]{3,80}$/.test(username) ||
+      !password ||
+      password.length < 16 ||
+      Buffer.byteLength(password) > 72 ||
+      /^(REPLACE|CHANGE|YOUR_|example)/i.test(password)
+    ) {
+      return null;
+    }
+    return { username, password };
+  }
   if (!username || !/^[a-z0-9_.-]{3,80}$/.test(username) || !password || password.length < 16 || Buffer.byteLength(password) > 72) {
     throw new Error('Configure PLATFORM_ADMIN_USERNAME (3–80 characters) and PLATFORM_ADMIN_PASSWORD (16+ characters, at most 72 UTF-8 bytes).');
   }

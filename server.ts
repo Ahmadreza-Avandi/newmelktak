@@ -27,19 +27,34 @@ import { documentsRouter } from "./src/server/modules/documents/documents.routes
 import { transactionsRouter } from "./src/server/modules/transactions/transactions.routes.js";
 import { platformRouter } from "./src/server/modules/platform/platform.routes.js";
 import { platformUiRouter } from "./src/server/modules/platform/platform.ui.js";
+import { notificationsRouter } from "./src/server/modules/notifications/notifications.routes.js";
+import { notificationScheduler } from "./src/server/modules/notifications/notification-scheduler.service.js";
 import { errorMiddleware } from "./src/server/middleware/error.middleware.js";
+import { requestLoggerMiddleware } from "./src/server/middleware/request-logger.middleware.js";
+import { logger } from "./src/server/logging/logger.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 async function startServer() {
   validateRuntimeConfig();
-  await postgresDb.init();
+  const isProd = process.env.NODE_ENV === "production";
+  const dbReadyPromise = postgresDb.init();
+  const vitePromise = !isProd
+    ? createViteServer({
+        server: { middlewareMode: true, hmr: false },
+        appType: "spa",
+      })
+    : Promise.resolve(null);
   const app = express();
   if (process.env.TRUST_PROXY)
     app.set(
       "trust proxy",
       process.env.TRUST_PROXY.split(",").map((v) => v.trim()),
     );
-  let PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3e3;
+  let PORT = process.env.DEFAULT_APP_PORT
+    ? parseInt(process.env.DEFAULT_APP_PORT, 10)
+    : process.env.PORT
+      ? parseInt(process.env.PORT, 10)
+      : 3e3;
   const portArgIndex = process.argv.indexOf("--port");
   if (portArgIndex !== -1 && process.argv[portArgIndex + 1]) {
     const parsed = parseInt(process.argv[portArgIndex + 1], 10);
@@ -47,7 +62,6 @@ async function startServer() {
       PORT = parsed;
     }
   }
-  const isProd = process.env.NODE_ENV === "production";
   app.use(
     helmet({
       frameguard: false,
@@ -79,6 +93,7 @@ async function startServer() {
   );
   app.use(express.json({ limit: "20mb" }));
   app.use(cookieParser());
+  app.use("/api", requestLoggerMiddleware);
   app.use("/api", (req, res, next) => {
     const method = req.method.toUpperCase();
     if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
@@ -86,15 +101,42 @@ async function startServer() {
       if (origin) {
         try {
           const originUrl = new URL(origin);
-          const expected = `${req.protocol}://${req.get("host")}`;
-          const allowed = (process.env.ALLOWED_ORIGINS || "")
-            .split(",")
-            .map((v) => v.trim())
-            .filter(Boolean);
+          const isLoopback = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(
+            req.socket.remoteAddress || "",
+          );
+          const forwardedProto = req.headers["x-forwarded-proto"];
+          const proto =
+            typeof forwardedProto === "string" && forwardedProto.trim()
+              ? forwardedProto.split(",")[0].trim()
+              : req.protocol;
+          const forwardedHost = req.headers["x-forwarded-host"];
+          const host =
+            isLoopback &&
+            typeof forwardedHost === "string" &&
+            forwardedHost.trim()
+              ? forwardedHost.split(",")[0].trim()
+              : req.get("host");
+          const expected = `${proto}://${host}`;
+          const allowed = [
+            ...(process.env.ALLOWED_ORIGINS || "")
+              .split(",")
+              .map((v) => v.trim())
+              .filter(Boolean),
+            ...(process.env.APP_URL ? [process.env.APP_URL.trim()] : []),
+          ];
           if (
             originUrl.origin !== expected &&
             !allowed.includes(originUrl.origin)
           ) {
+            logger.warn("Cross-origin mutation blocked by CSRF origin check", {
+              module: "security",
+              operation: "csrf_blocked",
+              requestId: req.requestId,
+              method: req.method,
+              route: req.originalUrl,
+              status: 403,
+              details: { origin: originUrl.origin, expected },
+            });
             return res.status(403).json({
               success: false,
               error: {
@@ -104,6 +146,14 @@ async function startServer() {
             });
           }
         } catch {
+          logger.warn("Malformed Origin header blocked by CSRF check", {
+            module: "security",
+            operation: "csrf_invalid_origin",
+            requestId: req.requestId,
+            method: req.method,
+            route: req.originalUrl,
+            status: 403,
+          });
           return res.status(403).json({
             success: false,
             error: {
@@ -125,6 +175,14 @@ async function startServer() {
     fs.mkdirSync(propertyMediaDir, { recursive: true });
   }
   app.use("/uploads/properties", express.static(propertyMediaDir));
+  app.use(["/api", getPlatformPath()], async (_req, _res, next) => {
+    try {
+      await dbReadyPromise;
+      next();
+    } catch (err) {
+      next(err);
+    }
+  });
   app.use("/api/v1/public", publicRouter);
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1/agent", agentRouter);
@@ -137,6 +195,7 @@ async function startServer() {
   app.use("/api/v1/health", healthRouter);
   app.use("/api/v1/documents", documentsRouter);
   app.use("/api/v1/transactions", transactionsRouter);
+  app.use("/api/v1/notifications", notificationsRouter);
   app.use("/api/v1/platform", platformRouter);
   app.use(getPlatformPath(), platformUiRouter);
   if (getPlatformPath() !== "/platform")
@@ -167,22 +226,29 @@ async function startServer() {
   });
   app.use("/api", errorMiddleware);
   if (!isProd) {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
+    app.use(async (req, res, next) => {
+      try {
+        const vite = await vitePromise;
+        vite!.middlewares(req, res, next);
+      } catch (e) {
+        next(e);
+      }
     });
-    app.use(vite.middlewares);
     app.use("*", async (req, res, next) => {
       if (req.originalUrl.startsWith("/api")) {
         return next();
       }
       try {
+        const vite = await vitePromise;
         const indexPath = path.resolve(__dirname, "index.html");
         let template = fs.readFileSync(indexPath, "utf-8");
-        template = await vite.transformIndexHtml(req.originalUrl, template);
+        template = await vite!.transformIndexHtml(req.originalUrl, template);
         res.status(200).set({ "Content-Type": "text/html" }).end(template);
       } catch (e) {
-        vite.ssrFixStacktrace(e);
+        try {
+          const vite = await vitePromise;
+          vite?.ssrFixStacktrace(e as Error);
+        } catch {}
         next(e);
       }
     });
@@ -206,23 +272,63 @@ async function startServer() {
     });
   }
   const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(
-      `[Amlak OS] Server listening at http://0.0.0.0:${PORT} in ${isProd ? "production" : "development"} mode`,
+    logger.info(
+      `Server listening at http://0.0.0.0:${PORT} in ${isProd ? "production" : "development"} mode`,
+      {
+        module: "server",
+        operation: "startup",
+        details: { port: PORT, mode: isProd ? "production" : "development" },
+      },
     );
   });
+  Promise.all([dbReadyPromise, vitePromise])
+    .then(() => {
+      notificationScheduler.start();
+    })
+    .catch((err) => {
+      logger.error(err?.message || "Critical startup failure", {
+        module: "server",
+        operation: "startup_failed",
+        details: { name: err?.name || "Error", code: err?.code || null },
+        stack: err?.stack || null,
+        persistToDb: false,
+      });
+      server.close(() => process.exit(1));
+      setTimeout(() => process.exit(1), 2000).unref();
+    });
   let stopping = false;
   for (const signal of ["SIGTERM", "SIGINT"])
     process.on(signal, () => {
       if (stopping) return;
       stopping = true;
-      const deadline = setTimeout(() => process.exit(1), 25000);
+      logger.info(`Received ${signal}; starting graceful shutdown`, {
+        module: "server",
+        operation: "shutdown_started",
+        details: { signal },
+      });
+      const deadline = setTimeout(() => {
+        logger.error("Graceful shutdown timed out; forcing exit", {
+          module: "server",
+          operation: "shutdown_timeout",
+        });
+        process.exit(1);
+      }, 25000);
       deadline.unref();
       server.close(async () => {
         try {
+          notificationScheduler.stop();
+          await logger.flush();
           await postgresDb.pg.close();
           clearTimeout(deadline);
           process.exit(0);
-        } catch {
+        } catch (err: any) {
+          logger.error("Error during graceful shutdown", {
+            module: "server",
+            operation: "shutdown_failed",
+            details: { error: err?.message },
+            stack: err?.stack || null,
+            persistToDb: false,
+          });
           process.exit(1);
         }
       });
@@ -230,12 +336,28 @@ async function startServer() {
 }
 __name(startServer, "startServer");
 process.on("uncaughtException", (err) => {
-  console.error("[Amlak OS] Uncaught exception:", err);
+  logger.error(err?.message || "Uncaught exception", {
+    module: "server",
+    operation: "uncaught_exception",
+    details: { name: err?.name || "Error" },
+    stack: err?.stack || null,
+  });
 });
-process.on("unhandledRejection", (reason) => {
-  console.error("[Amlak OS] Unhandled rejection:", reason);
+process.on("unhandledRejection", (reason: any) => {
+  logger.error(reason?.message || "Unhandled promise rejection", {
+    module: "server",
+    operation: "unhandled_rejection",
+    details: { reason: typeof reason === "string" ? reason : reason?.name || "Rejection" },
+    stack: reason?.stack || null,
+  });
 });
 startServer().catch((err) => {
-  console.error("[Amlak OS] Critical startup failure:", err);
+  logger.error(err?.message || "Critical startup failure", {
+    module: "server",
+    operation: "startup_failed",
+    details: { name: err?.name || "Error", code: err?.code || null },
+    stack: err?.stack || null,
+    persistToDb: false,
+  });
   process.exit(1);
 });

@@ -3,7 +3,13 @@ import { Router } from "express";
 import { postgresDb } from "../../db/postgres.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { subscriptionEnforcementMiddleware } from "../../middleware/subscription.middleware.js";
+import {
+  idempotencyMiddleware,
+  parseExpectedUpdatedAt,
+  isRecordModifiedSince,
+} from "../../middleware/idempotency.middleware.js";
 import { QuickAddTaskSchema } from "../../../shared/validation.js";
+import { notificationScheduler } from "../notifications/notification-scheduler.service.js";
 
 import { taskSchedule } from "../../../shared/task-schedule.js";
 
@@ -11,6 +17,7 @@ const tasksRouter = Router();
 
 tasksRouter.use(authMiddleware);
 tasksRouter.use(subscriptionEnforcementMiddleware);
+tasksRouter.use(idempotencyMiddleware);
 
 tasksRouter.get("/", async (req, res, next) => {
   try {
@@ -130,6 +137,13 @@ tasksRouter.post("/", async (req, res, next) => {
       branch_id: branchId
     });
 
+    if (task) {
+      void notificationScheduler.runSweep({
+        tenantId,
+        userId: task.assigned_user_id || userId,
+      });
+    }
+
     return res.status(201).json({
       success: true,
       data: task,
@@ -191,6 +205,26 @@ tasksRouter.patch("/:id", async (req, res, next) => {
     const tenantId = req.tenant.id;
     const userId = req.user.id;
 
+    const existing = await postgresDb.getTaskById(tenantId, req.params.id);
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: "TASK_NOT_FOUND", message: "پیگیری مورد نظر یافت نشد." }
+      });
+    }
+
+    const expectedUpdatedAt = parseExpectedUpdatedAt(req);
+    if (isRecordModifiedSince(existing.updated_at, expectedUpdatedAt)) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: "SYNC_CONFLICT",
+          message: "این پیگیری پیش از همگام‌سازی توسط کاربر دیگری ویرایش شده است.",
+        },
+        data: { server_record: existing },
+      });
+    }
+
     const task = await postgresDb.updateTask(tenantId, req.params.id, userId, validated);
     if (!task) {
       return res.status(404).json({
@@ -198,10 +232,38 @@ tasksRouter.patch("/:id", async (req, res, next) => {
         error: { code: "TASK_NOT_FOUND", message: "پیگیری مورد نظر یافت نشد." }
       });
     }
+    void notificationScheduler.runSweep({
+      tenantId,
+      userId: task.assigned_user_id || userId,
+    });
     return res.json({
       success: true,
       data: task,
       message: "پیگیری با موفقیت بروزرسانی شد."
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+tasksRouter.delete("/:id", async (req, res, next) => {
+  try {
+    const deleted = await postgresDb.deleteTask(
+      req.tenant.id,
+      req.params.id,
+      req.user.id,
+      req.user.role_code,
+    );
+    if (!deleted) {
+      return res.status(404).json({
+        success: false,
+        error: { code: "TASK_NOT_FOUND", message: "پیگیری مورد نظر یافت نشد." }
+      });
+    }
+    return res.json({
+      success: true,
+      data: { id: req.params.id, deleted: true },
+      message: "پیگیری با موفقیت حذف شد."
     });
   } catch (error) {
     next(error);

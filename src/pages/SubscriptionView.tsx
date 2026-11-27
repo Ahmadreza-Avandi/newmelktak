@@ -16,7 +16,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api } from "../services/apiClient.ts";
-import { formatJalaaliDate, formatTomanWords } from "../utils/jalaali.ts";
+import { formatJalaaliDate } from "../utils/jalaali.ts";
 
 export interface SubscriptionViewProps {
   onBack: () => void;
@@ -81,20 +81,11 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({
     }
   };
 
-  const calculatePrice = () => {
-    const annualPrice =
-      (
-        {
-          STARTER: 12e6,
-          PROFESSIONAL: 28e6,
-          ENTERPRISE_PRO: 49e6,
-        } as Record<string, number>
-      )[selectedPlan] || 49e6;
-    const monthly = annualPrice / 12;
-    if (durationMonths === 1) return Math.round(monthly * 1.2);
-    if (durationMonths === 3) return Math.round(monthly * 3 * 1.1);
-    if (durationMonths === 6) return Math.round(monthly * 6 * 1.05);
-    return annualPrice;
+  const getPlanCapacityLabel = (plan: any) => {
+    if (plan?.capacity_label) return plan.capacity_label;
+    if (plan?.code === "STARTER") return "۱ شعبه • ۳ مشاور";
+    if (plan?.code === "PROFESSIONAL") return "۳ شعبه • ۵ مشاور";
+    return "۵ شعبه به بالا • ۸ مشاور به بالا";
   };
 
   if (loading && !subscription) {
@@ -159,7 +150,7 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({
         <div className="flex items-start justify-between">
           <div>
             <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-white/20 text-white backdrop-blur-xs">
-              {subscription?.plan_title || "پلن سازمانی نامحدود"}
+              {subscription?.plan_title || "پلن پیشرفته"}
             </span>
             <h2 className="text-lg font-black mt-2">
               {isExpired
@@ -303,13 +294,22 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({
       </div>
 
       <div className="space-y-3">
-        <h3 className="text-xs font-black text-[#172033] flex items-center gap-1.5 px-1">
-          <Layers className="w-3.5 h-3.5 text-[#145DB5]" />
-          پلن‌های اشتراک ملک تک
-        </h3>
+        <div className="flex items-center justify-between px-1">
+          <h3 className="text-xs font-black text-[#172033] flex items-center gap-1.5">
+            <Layers className="w-3.5 h-3.5 text-[#145DB5]" />
+            پلن‌های اشتراک ملک تک
+          </h3>
+          <span className="text-[10px] font-bold text-slate-500">
+            تمامی امکانات در همه پلن‌ها یکسان است
+          </span>
+        </div>
+        <div className="bg-blue-50/70 border border-blue-200 rounded-xl px-3 py-2 text-[11px] text-blue-900 font-medium">
+          تمامی امکانات و ماژول‌ها در همه پلن‌ها یکسان و فعال هستند؛ تفاوت پلن‌ها تنها در ظرفیت شعب و تعداد مشاوران است.
+        </div>
         <div className="space-y-2.5">
           {subscription?.plans_catalog?.map((plan: any) => {
             const isCurrent = subscription.plan_code === plan.code;
+            const capacityText = getPlanCapacityLabel(plan);
             return (
               <div
                 key={plan.code}
@@ -319,53 +319,38 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({
                     : "border-[#E2E8F0] hover:border-slate-300"
                 }`}
               >
-                <div className="flex items-start justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-black text-[#172033]">
                         {plan.title}
                       </span>
                       {isCurrent && (
-                        <span className="text-[10px] bg-[#145DB5] text-white px-1.5 py-0.2 rounded-md font-bold">
+                        <span className="text-[10px] bg-[#145DB5] text-white px-1.5 py-0.5 rounded-md font-bold">
                           پلن فعلی
                         </span>
                       )}
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      {plan.max_branches} شعبه • حداکثر {plan.max_agents} مشاور
+                    <p className="text-[11px] font-bold text-[#145DB5] mt-1">
+                      {capacityText}
                     </p>
                   </div>
-                  <div className="text-left">
-                    <span className="text-xs font-black text-[#145DB5]">
-                      {plan.price_annual.toLocaleString("fa-IR")}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-lg">
+                      دسترسی کامل ماژول‌ها
                     </span>
-                    <span className="text-[10px] text-slate-400 mr-1">
-                      تومان / سالانه
-                    </span>
-                  </div>
-                </div>
-                <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between">
-                  <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-600">
-                    {plan.features.slice(0, 3).map((f: string, idx: number) => (
-                      <span
-                        key={idx}
-                        className="bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200"
+                    {!isCurrent && (
+                      <button
+                        onClick={() => {
+                          setSelectedPlan(plan.code);
+                          setModalOpen(true);
+                        }}
+                        className="px-2.5 py-1 text-xs font-bold text-[#145DB5] hover:bg-blue-50 rounded-lg border border-blue-200 transition"
                       >
-                        {f}
-                      </span>
-                    ))}
+                        انتخاب پلن
+                      </button>
+                    )}
                   </div>
-                  {!isCurrent && (
-                    <button
-                      onClick={() => {
-                        setSelectedPlan(plan.code);
-                        setModalOpen(true);
-                      }}
-                      className="px-2.5 py-1 text-xs font-bold text-[#145DB5] hover:bg-blue-50 rounded-lg transition"
-                    >
-                      انتخاب این پلن
-                    </button>
-                  )}
                 </div>
               </div>
             );
@@ -380,7 +365,7 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({
               <div className="flex items-center gap-2">
                 <CreditCard className="w-5 h-5 text-[#145DB5]" />
                 <h3 className="text-sm font-black text-[#172033]">
-                  تمدید و ارتقای اشتراک دفتر
+                  ارتقا یا تمدید اشتراک دفتر
                 </h3>
               </div>
               <button
@@ -409,13 +394,13 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({
                   >
                     <div>
                       <div className="text-xs text-[#172033]">{plan.title}</div>
-                      <div className="text-[10px] text-slate-500">
-                        {plan.max_branches} شعبه • {plan.max_agents} مشاور
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        {getPlanCapacityLabel(plan)}
                       </div>
                     </div>
-                    <div className="text-xs font-black text-[#145DB5]">
-                      {plan.price_annual.toLocaleString("fa-IR")} ت
-                    </div>
+                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                      امکانات کامل
+                    </span>
                   </button>
                 ))}
               </div>
@@ -430,7 +415,7 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({
                   { m: 1, label: "۱ ماهه" },
                   { m: 3, label: "۳ ماهه" },
                   { m: 6, label: "۶ ماهه" },
-                  { m: 12, label: "۱ ساله (تخفیف ویژه)" },
+                  { m: 12, label: "۱ ساله" },
                 ].map((opt) => (
                   <button
                     key={opt.m}
@@ -448,16 +433,8 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({
               </div>
             </div>
 
-            <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-1.5 text-xs">
-              <div className="flex justify-between text-slate-600">
-                <span>مبلغ قابل پرداخت:</span>
-                <span className="font-black text-[#145DB5] text-sm">
-                  {calculatePrice().toLocaleString("fa-IR")} تومان
-                </span>
-              </div>
-              <p className="text-[10px] text-slate-500 font-medium text-left">
-                {formatTomanWords(calculatePrice())} تومان
-              </p>
+            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 text-[11px] text-slate-600 leading-relaxed">
+              تغییر و تمدید پلن پس از بررسی و تأیید توسط مدیریت پلتفرم فعال می‌شود.
             </div>
 
             <div className="flex items-center gap-2 pt-2">
@@ -477,12 +454,12 @@ export const SubscriptionView: React.FC<SubscriptionViewProps> = ({
                 {renewing ? (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    در حال ثبت تمدید...
+                    در حال ثبت درخواست...
                   </>
                 ) : (
                   <>
                     <CircleCheck className="w-3.5 h-3.5" />
-                    تأیید و پرداخت آنی
+                    ثبت درخواست تغییر یا تمدید پلن
                   </>
                 )}
               </button>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Plus,
   ListFilter,
@@ -26,7 +26,18 @@ export const TasksPage: React.FC<{
   onOpenQuickAdd: () => void;
   onCompleteTask: (id: string, result?: string) => void;
   onCancelTask: (id: string) => void;
-}> = ({ tasks: e, onOpenQuickAdd: t, onCompleteTask: n, onCancelTask: r }) => {
+  onEditTask?: (task: any) => void;
+  onDeleteTask?: (id: string) => void;
+  highlightedTaskId?: string | null;
+}> = ({
+  tasks: e,
+  onOpenQuickAdd: t,
+  onCompleteTask: n,
+  onCancelTask: r,
+  onEditTask,
+  onDeleteTask,
+  highlightedTaskId,
+}) => {
   const [i, a] = useState<"LIST" | "CALENDAR">("LIST");
   const [o, s] = useState<"TODAY" | "OVERDUE" | "FUTURE" | "COMPLETED">("TODAY");
   const [c, l] = useState<"MONTH" | "WEEK" | "DAY">("MONTH");
@@ -52,6 +63,22 @@ export const TasksPage: React.FC<{
       return false;
     }
   };
+
+  useEffect(() => {
+    if (!highlightedTaskId) return;
+    const target = e.find((task) => task.id === highlightedTaskId);
+    if (!target) return;
+    a("LIST");
+    if (target.status === "COMPLETED" || target.status === "CANCELLED") {
+      s("COMPLETED");
+    } else if (taskIsOverdue(target, new Date())) {
+      s("OVERDUE");
+    } else if (y(target, d.jy, d.jm, d.jd)) {
+      s("TODAY");
+    } else {
+      s("FUTURE");
+    }
+  }, [highlightedTaskId, e]);
 
   const b = useMemo(
     () =>
@@ -286,6 +313,9 @@ export const TasksPage: React.FC<{
                   task={task}
                   onComplete={n}
                   onCancel={r}
+                  onEdit={onEditTask}
+                  onDelete={onDeleteTask}
+                  highlighted={highlightedTaskId === task.id}
                 />
               ))}
             </div>
@@ -497,6 +527,9 @@ export const TasksPage: React.FC<{
                       task={task}
                       onComplete={n}
                       onCancel={r}
+                      onEdit={onEditTask}
+                      onDelete={onDeleteTask}
+                      highlighted={highlightedTaskId === task.id}
                     />
                   ))}
               </div>

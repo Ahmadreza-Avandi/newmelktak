@@ -1,9 +1,14 @@
 // @ts-nocheck
 import { Router, Request, Response, NextFunction } from "express";
+import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
-import { platformAdminAllowed } from "../../config/runtime.js";
+import { getPlatformCredentials, platformAdminAllowed } from "../../config/runtime.js";
 import { authRateLimiter } from "../../middleware/rate-limit.middleware.js";
 import { postgresDb } from "../../db/postgres.js";
+import { logger, getLogRetentionConfig } from "../../logging/logger.js";
+import { resolveRequestId } from "../../middleware/request-logger.middleware.js";
+import { redactValue } from "../../logging/redactor.js";
+import { dbAdminRouter } from "./db-admin.routes.js";
 
 const platformRouter = Router();
 
@@ -13,6 +18,8 @@ export async function requirePlatformAdmin(
   res: Response,
   next: NextFunction,
 ) {
+  const requestId = resolveRequestId(req);
+  const routePath = `${req.baseUrl || ""}${req.path || ""}`;
   try {
     let token: string | undefined;
     if (req.headers.authorization?.startsWith("Bearer ")) {
@@ -32,6 +39,14 @@ export async function requirePlatformAdmin(
     }
 
     if (!token) {
+      logger.warn("Unauthorized access attempt to platform admin endpoint (missing token)", {
+        module: "platform",
+        operation: "unauthorized_platform_access",
+        requestId,
+        method: req.method,
+        route: routePath,
+        status: 401,
+      });
       return res.status(401).json({
         success: false,
         error: {
@@ -49,6 +64,14 @@ export async function requirePlatformAdmin(
       !result.admin.is_active ||
       !platformAdminAllowed(result.admin.username)
     ) {
+      logger.warn("Unauthorized access attempt to platform admin endpoint (invalid/disallowed session)", {
+        module: "platform",
+        operation: "unauthorized_platform_access",
+        requestId,
+        method: req.method,
+        route: routePath,
+        status: 401,
+      });
       return res.status(401).json({
         success: false,
         error: {
@@ -71,6 +94,7 @@ export async function requirePlatformAdmin(
 const platformAuthRouter = Router();
 
 platformAuthRouter.post("/login", authRateLimiter(), async (req, res, next) => {
+  const requestId = resolveRequestId(req);
   try {
     const { username, password } = req.body || {};
     if (
@@ -93,6 +117,15 @@ platformAuthRouter.post("/login", authRateLimiter(), async (req, res, next) => {
       username.trim().toLowerCase(),
     );
     if (!admin || !admin.is_active || !platformAdminAllowed(admin.username)) {
+      logger.warn("Platform admin login rejected", {
+        module: "platform",
+        operation: "platform_login_failed",
+        requestId,
+        method: req.method,
+        route: "/api/v1/platform/auth/login",
+        status: 401,
+        details: { username: username.trim().toLowerCase() },
+      });
       return res.status(401).json({
         success: false,
         error: {
@@ -104,6 +137,16 @@ platformAuthRouter.post("/login", authRateLimiter(), async (req, res, next) => {
 
     const isMatch = bcrypt.compareSync(password, admin.password_hash);
     if (!isMatch) {
+      logger.warn("Platform admin login failed: wrong password", {
+        module: "platform",
+        operation: "platform_login_failed",
+        requestId,
+        method: req.method,
+        route: "/api/v1/platform/auth/login",
+        status: 401,
+        userId: admin.id,
+        details: { username: admin.username },
+      });
       return res.status(401).json({
         success: false,
         error: {
@@ -126,9 +169,20 @@ platformAuthRouter.post("/login", authRateLimiter(), async (req, res, next) => {
     res.cookie("amlak_platform_session", rawToken, {
       httpOnly: true,
       secure: isHttps,
-      sameSite: "lax",
+      sameSite: isHttps ? "none" : "lax",
       path: "/",
       maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    logger.info("Platform admin logged in successfully", {
+      module: "platform",
+      operation: "platform_login_success",
+      requestId,
+      method: req.method,
+      route: "/api/v1/platform/auth/login",
+      status: 200,
+      userId: admin.id,
+      details: { username: admin.username },
     });
 
     const { password_hash, ...safeAdmin } = admin;
@@ -136,6 +190,7 @@ platformAuthRouter.post("/login", authRateLimiter(), async (req, res, next) => {
       success: true,
       data: {
         admin: safeAdmin,
+        token: rawToken,
       },
       message: "ورود به پنل مدیریت کلان پلتفرم با موفقیت انجام شد.",
     });
@@ -158,13 +213,159 @@ platformAuthRouter.post("/logout", async (req, res, next) => {
       path: "/",
       httpOnly: true,
       secure: isHttps,
-      sameSite: "lax",
+      sameSite: isHttps ? "none" : "lax",
     });
     return res.json({
       success: true,
       data: { message: "با موفقیت از پنل مدیریت پلتفرم خارج شدید." },
     });
   } catch (err) {
+    next(err);
+  }
+});
+
+platformAuthRouter.get("/setup-status", async (req, res, next) => {
+  try {
+    await postgresDb.init();
+    const envConfigured = Boolean(getPlatformCredentials());
+    const countRes = await postgresDb.pg.query(`SELECT COUNT(*)::int AS cnt FROM platform_admins`);
+    const adminCount = Number(countRes.rows[0]?.cnt || 0);
+    const needsSetup =
+      process.env.NODE_ENV !== "production" && !envConfigured && adminCount === 0;
+
+    let token: string | undefined;
+    if (req.headers.authorization?.startsWith("Bearer ")) {
+      token = req.headers.authorization.split(" ")[1];
+    }
+    if (!token && req.cookies?.amlak_platform_session) {
+      token = req.cookies.amlak_platform_session;
+    }
+
+    let authenticated = false;
+    let admin = null;
+    if (token) {
+      const session = await postgresDb.getPlatformSessionByToken(token);
+      if (session?.admin?.is_active && platformAdminAllowed(session.admin.username)) {
+        const { password_hash: _ignored, ...safeAdmin } = session.admin as any;
+        authenticated = true;
+        admin = safeAdmin;
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        needsSetup,
+        envConfigured,
+        authenticated,
+        admin,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+platformAuthRouter.post("/setup", authRateLimiter(), async (req, res, next) => {
+  const requestId = resolveRequestId(req);
+  try {
+    if (process.env.NODE_ENV === "production" || getPlatformCredentials()) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: "SETUP_DISABLED",
+          message: "راه‌اندازی اولیه از طریق محیط تنظیمات پیکربندی شده و غیرفعال است.",
+        },
+      });
+    }
+
+    const rawUsername = typeof req.body?.username === "string" ? req.body.username.trim().toLowerCase() : "";
+    const rawPassword = typeof req.body?.password === "string" ? req.body.password : "";
+    const displayName =
+      typeof req.body?.display_name === "string" && req.body.display_name.trim()
+        ? req.body.display_name.trim().slice(0, 120)
+        : "مدیر دیتابیس و پلتفرم";
+
+    if (!/^[a-z0-9_.-]{3,80}$/.test(rawUsername)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "نام کاربری باید ۳ تا ۸۰ کاراکتر انگلیسی (حروف، اعداد، . _ -) باشد.",
+        },
+      });
+    }
+
+    if (rawPassword.length < 8 || Buffer.byteLength(rawPassword) > 72) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "رمز عبور باید بین ۸ تا ۷۲ کاراکتر باشد.",
+        },
+      });
+    }
+
+    await postgresDb.init();
+    const adminId = crypto.randomUUID();
+    const passwordHash = bcrypt.hashSync(rawPassword, 12);
+
+    const createdAdmin = await postgresDb.pg.transaction(async (tx: any) => {
+      const cntRes = await tx.query(`SELECT COUNT(*)::int AS cnt FROM platform_admins`);
+      if (Number(cntRes.rows[0]?.cnt || 0) > 0) {
+        throw Object.assign(new Error("حساب مدیر قبلاً ایجاد شده است. لطفاً با نام کاربری خود وارد شوید."), {
+          status: 409,
+          code: "SETUP_ALREADY_COMPLETED",
+        });
+      }
+      const ins = await tx.query(
+        `INSERT INTO platform_admins (id, username, password_hash, display_name, is_active)
+         VALUES ($1, $2, $3, $4, true)
+         RETURNING id, username, display_name, email, phone, is_active, created_at`,
+        [adminId, rawUsername, passwordHash, displayName],
+      );
+      return ins.rows[0];
+    });
+
+    const clientIp = (req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress;
+    const userAgent = req.headers["user-agent"];
+    const rawToken = await postgresDb.createPlatformSession(createdAdmin.id, clientIp, userAgent);
+
+    const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https";
+    res.cookie("amlak_platform_session", rawToken, {
+      httpOnly: true,
+      secure: isHttps,
+      sameSite: isHttps ? "none" : "lax",
+      path: "/",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    logger.info("First-run platform admin claimed", {
+      module: "platform",
+      operation: "platform_setup_claimed",
+      requestId,
+      method: req.method,
+      route: "/api/v1/platform/auth/setup",
+      status: 201,
+      userId: createdAdmin.id,
+      details: { username: createdAdmin.username },
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: {
+        admin: createdAdmin,
+        token: rawToken,
+      },
+      message: "حساب مدیر با موفقیت ایجاد و فعال شد.",
+    });
+  } catch (err: any) {
+    if (err?.status === 409) {
+      return res.status(409).json({
+        success: false,
+        error: { code: err.code || "SETUP_ALREADY_COMPLETED", message: err.message },
+      });
+    }
     next(err);
   }
 });
@@ -180,6 +381,7 @@ platformRouter.use("/auth", platformAuthRouter);
 
 // ALL endpoints below this point require authenticated Platform Admin session!
 platformRouter.use(requirePlatformAdmin);
+platformRouter.use("/db", dbAdminRouter);
 
 platformRouter.get("/metrics", async (req, res, next) => {
   try {
@@ -506,6 +708,153 @@ platformRouter.get("/support/audit-logs", async (req, res, next) => {
   }
 });
 
+// --- System Logs API (Strictly Platform Admin Only) ---
+platformRouter.get("/logs", async (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(String(req.query.page || "1"), 10) || 1);
+    const pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(String(req.query.pageSize || req.query.limit || "25"), 10) || 25),
+    );
+    const level = typeof req.query.level === "string" ? req.query.level : undefined;
+    const mod = typeof req.query.module === "string" ? req.query.module : undefined;
+    const search = typeof req.query.search === "string" ? req.query.search : undefined;
+    const from = typeof req.query.from === "string" ? req.query.from : undefined;
+    const to = typeof req.query.to === "string" ? req.query.to : undefined;
+
+    const result = await postgresDb.getSystemLogs({
+      page,
+      pageSize,
+      level,
+      module: mod,
+      search,
+      from,
+      to,
+    });
+
+    const retention = getLogRetentionConfig();
+    return res.json({
+      success: true,
+      data: {
+        items: redactValue(result.items),
+        modules: result.modules,
+        pagination: result.pagination,
+        retention: {
+          retentionDays: retention.retentionDays,
+          maxDbRows: retention.maxDbRows,
+          maxFileBytes: retention.maxFileBytes,
+          maxFiles: retention.maxFiles,
+        },
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+platformRouter.delete("/logs", async (req, res, next) => {
+  try {
+    const deletedCount = await postgresDb.deleteAllSystemLogs();
+    res.locals.skipDbHttpLog = true;
+    logger.info("All system logs cleared by platform admin", {
+      module: "platform",
+      operation: "system_logs_cleared",
+      requestId: req.requestId,
+      method: req.method,
+      route: "/api/v1/platform/logs",
+      status: 200,
+      userId: req.platformAdmin?.id,
+      details: { deletedCount },
+      persistToDb: false,
+    });
+    return res.json({
+      success: true,
+      data: { deletedCount },
+      message:
+        deletedCount > 0
+          ? `تعداد ${deletedCount} رکورد لاگ با موفقیت حذف شد.`
+          : "هیچ لاگی برای حذف وجود نداشت.",
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+platformRouter.get("/logs/:id", async (req, res, next) => {
+  try {
+    const id = String(req.params.id || "");
+    if (!/^[0-9a-f-]{36}$/i.test(id)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "INVALID_LOG_ID",
+          message: "شناسه لاگ نامعتبر است.",
+        },
+      });
+    }
+    const item = await postgresDb.getSystemLogById(id);
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: "LOG_NOT_FOUND",
+          message: "رکورد لاگ مورد نظر یافت نشد.",
+        },
+      });
+    }
+    return res.json({
+      success: true,
+      data: redactValue(item),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+platformRouter.delete("/logs/:id", async (req, res, next) => {
+  try {
+    const id = String(req.params.id || "");
+    if (!/^[0-9a-f-]{36}$/i.test(id)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "INVALID_LOG_ID",
+          message: "شناسه لاگ نامعتبر است.",
+        },
+      });
+    }
+    const deleted = await postgresDb.deleteSystemLogById(id);
+    if (!deleted) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: "LOG_NOT_FOUND",
+          message: "رکورد لاگ مورد نظر یافت نشد.",
+        },
+      });
+    }
+    res.locals.skipDbHttpLog = true;
+    logger.info("System log deleted by platform admin", {
+      module: "platform",
+      operation: "system_log_deleted",
+      requestId: req.requestId,
+      method: req.method,
+      route: "/api/v1/platform/logs/:id",
+      status: 200,
+      userId: req.platformAdmin?.id,
+      details: { logId: id },
+      persistToDb: false,
+    });
+    return res.json({
+      success: true,
+      data: { id, deleted: true },
+      message: "لاگ مورد نظر با موفقیت حذف شد.",
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // --- Platform Data Backup & Restore (Export / Import) APIs ---
 platformRouter.get("/tenants/:id/export", async (req, res, next) => {
   try {
@@ -514,10 +863,33 @@ platformRouter.get("/tenants/:id/export", async (req, res, next) => {
     const dateStr = new Date().toISOString().split("T")[0];
     const filename = `backup-${agencyCode}-${dateStr}.json`;
 
+    logger.info("Tenant backup exported by platform admin", {
+      module: "backup",
+      operation: "backup_export_tenant",
+      requestId: req.requestId,
+      method: req.method,
+      route: "/api/v1/platform/tenants/:id/export",
+      status: 200,
+      userId: req.platformAdmin?.id,
+      tenantId: req.params.id,
+      details: { agencyCode, summary: backup.summary },
+    });
+
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     return res.send(JSON.stringify(backup, null, 2));
-  } catch (err) {
+  } catch (err: any) {
+    logger.error("Tenant backup export failed", {
+      module: "backup",
+      operation: "backup_export_tenant_failed",
+      requestId: req.requestId,
+      method: req.method,
+      route: "/api/v1/platform/tenants/:id/export",
+      userId: req.platformAdmin?.id,
+      tenantId: req.params.id,
+      details: { error: err?.message },
+      stack: err?.stack || null,
+    });
     next(err);
   }
 });
@@ -528,10 +900,31 @@ platformRouter.get("/backup/export-all", async (req, res, next) => {
     const dateStr = new Date().toISOString().split("T")[0];
     const filename = `system-full-backup-${dateStr}.json`;
 
+    logger.info("Full system backup exported by platform admin", {
+      module: "backup",
+      operation: "backup_export_all",
+      requestId: req.requestId,
+      method: req.method,
+      route: "/api/v1/platform/backup/export-all",
+      status: 200,
+      userId: req.platformAdmin?.id,
+      details: { totalTenants: backup.total_tenants },
+    });
+
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     return res.send(JSON.stringify(backup, null, 2));
-  } catch (err) {
+  } catch (err: any) {
+    logger.error("Full system backup export failed", {
+      module: "backup",
+      operation: "backup_export_all_failed",
+      requestId: req.requestId,
+      method: req.method,
+      route: "/api/v1/platform/backup/export-all",
+      userId: req.platformAdmin?.id,
+      details: { error: err?.message },
+      stack: err?.stack || null,
+    });
     next(err);
   }
 });
@@ -566,12 +959,34 @@ platformRouter.post("/tenants/import", async (req, res, next) => {
       req.platformAdmin.id,
     );
 
+    logger.info("Tenant backup restored successfully", {
+      module: "backup",
+      operation: "backup_import_success",
+      requestId: req.requestId,
+      method: req.method,
+      route: "/api/v1/platform/tenants/import",
+      status: 200,
+      userId: req.platformAdmin?.id,
+      tenantId: result.restored_tenant?.id || target_tenant_id || null,
+      details: { stats: result.stats, overrideExisting: Boolean(override_existing) },
+    });
+
     return res.status(200).json({
       success: true,
       message: `اطلاعات دفتر املاک «${result.restored_tenant?.name || ""}» (${result.restored_tenant?.agency_code || ""}) با موفقیت بازیابی شد.`,
       data: result,
     });
-  } catch (err) {
+  } catch (err: any) {
+    logger.error("Tenant backup restore failed", {
+      module: "backup",
+      operation: "backup_import_failed",
+      requestId: req.requestId,
+      method: req.method,
+      route: "/api/v1/platform/tenants/import",
+      userId: req.platformAdmin?.id,
+      details: { error: err?.message },
+      stack: err?.stack || null,
+    });
     next(err);
   }
 });
@@ -598,12 +1013,35 @@ platformRouter.post("/tenants/:id/import", async (req, res, next) => {
       req.platformAdmin.id,
     );
 
+    logger.info("Target tenant backup restored successfully", {
+      module: "backup",
+      operation: "backup_import_target_success",
+      requestId: req.requestId,
+      method: req.method,
+      route: "/api/v1/platform/tenants/:id/import",
+      status: 200,
+      userId: req.platformAdmin?.id,
+      tenantId: req.params.id,
+      details: { stats: result.stats },
+    });
+
     return res.status(200).json({
       success: true,
       message: `اطلاعات با موفقیت روی دفتر املاک مورد نظر بازیابی شد.`,
       data: result,
     });
-  } catch (err) {
+  } catch (err: any) {
+    logger.error("Target tenant backup restore failed", {
+      module: "backup",
+      operation: "backup_import_target_failed",
+      requestId: req.requestId,
+      method: req.method,
+      route: "/api/v1/platform/tenants/:id/import",
+      userId: req.platformAdmin?.id,
+      tenantId: req.params.id,
+      details: { error: err?.message },
+      stack: err?.stack || null,
+    });
     next(err);
   }
 });

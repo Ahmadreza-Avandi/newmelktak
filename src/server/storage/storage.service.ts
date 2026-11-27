@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { logger } from "../logging/logger.js";
 
 export class StorageService {
   private baseDir: string;
@@ -27,12 +28,30 @@ export class StorageService {
     const filename = `${Date.now()}_${randomHex}${ext}`;
     const filePath = path.join(tenantDir, filename);
 
-    await fs.promises.writeFile(filePath, buffer);
+    try {
+      await fs.promises.writeFile(filePath, buffer);
+    } catch (err: any) {
+      logger.error("Failed to save document file to storage", {
+        module: "storage",
+        operation: "file_save_failed",
+        tenantId,
+        details: { fileName: path.basename(originalName), fileSize: buffer.length, error: err?.message },
+        stack: err?.stack || null,
+      });
+      throw err;
+    }
     // Also save copy in root of privateDocsDir for flat basename lookup
     try {
       const flatPath = path.join(this.baseDir, filename);
       await fs.promises.copyFile(filePath, flatPath);
-    } catch {}
+    } catch (err: any) {
+      logger.warn("Failed to create flat copy of stored document", {
+        module: "storage",
+        operation: "file_copy_warning",
+        tenantId,
+        details: { filename, error: err?.message },
+      });
+    }
     return path.join(tenantId, filename);
   }
 
@@ -53,7 +72,18 @@ export class StorageService {
     const filename = `prop_${tenantId.slice(0, 8)}_${propertyId.slice(0, 8)}_${Date.now()}_${randomHex}${ext}`;
     const filePath = path.join(this.mediaDir, filename);
 
-    await fs.promises.writeFile(filePath, buffer);
+    try {
+      await fs.promises.writeFile(filePath, buffer);
+    } catch (err: any) {
+      logger.error("Failed to save property media file", {
+        module: "storage",
+        operation: "media_save_failed",
+        tenantId,
+        details: { propertyId, mimeType, fileSize: buffer.length, error: err?.message },
+        stack: err?.stack || null,
+      });
+      throw err;
+    }
     return {
       url: `/uploads/properties/${filename}`,
       fileName: originalName || `${safeBase}${ext}`
@@ -84,7 +114,13 @@ export class StorageService {
     try {
       await fs.promises.unlink(filePath);
       return true;
-    } catch {
+    } catch (err: any) {
+      logger.warn("Failed to delete file from storage", {
+        module: "storage",
+        operation: "file_delete_failed",
+        tenantId,
+        details: { storageKey: path.basename(storageKey), error: err?.message },
+      });
       return false;
     }
   }

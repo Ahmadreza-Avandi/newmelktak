@@ -1,6 +1,19 @@
 import { Request, Response, NextFunction } from "express";
 import { ZodError } from "zod";
-import crypto from "node:crypto";
+import { logger } from "../logging/logger.js";
+import { resolveRequestId } from "./request-logger.middleware.js";
+
+function inferModuleFromRoute(routePath: string): string {
+  if (routePath.includes("/auth")) return "auth";
+  if (routePath.includes("/documents")) return "documents";
+  if (routePath.includes("/properties")) return "properties";
+  if (routePath.includes("/platform")) return "platform";
+  if (routePath.includes("/transactions")) return "transactions";
+  if (routePath.includes("/customers")) return "customers";
+  if (routePath.includes("/tasks")) return "tasks";
+  if (routePath.includes("/agency") || routePath.includes("/agent")) return "agency";
+  return "api";
+}
 
 export function errorMiddleware(
   err: any,
@@ -9,29 +22,69 @@ export function errorMiddleware(
   next: NextFunction,
 ) {
   if (res.headersSent) return next(err);
-  const requestId = crypto.randomUUID();
-  const supplied = Number(err.status || err.statusCode);
+  const requestId = resolveRequestId(req);
+  req.requestId = requestId;
+  res.setHeader("X-Request-Id", requestId);
+
+  const supplied = Number(err?.status || err?.statusCode);
   const status =
     err instanceof ZodError
       ? 400
-      : err.code?.startsWith?.("LIMIT_")
+      : err?.code?.startsWith?.("LIMIT_")
         ? 400
         : Number.isInteger(supplied) && supplied >= 400 && supplied <= 599
           ? supplied
           : 500;
-  // Do not log URLs, bodies, cookies, SQL parameters, or raw database errors.
-  console.error(
-    JSON.stringify({
-      level: status >= 500 ? "error" : "warn",
-      event: "request_failed",
-      requestId,
-      method: req.method,
-      route: req.route?.path || "unmatched",
-      status,
-      errorType: err.constructor?.name || "Error",
-      time: new Date().toISOString(),
-    }),
-  );
+
+  const originalPath = req.originalUrl ? req.originalUrl.split("?")[0] : "";
+  const routePath = req.baseUrl && req.route?.path
+    ? `${req.baseUrl}${req.route.path}`
+    : originalPath || `${req.baseUrl || ""}${req.route?.path || req.path || "unmatched"}`;
+  const moduleName = inferModuleFromRoute(originalPath || routePath);
+  const errorType = err?.constructor?.name || "Error";
+  const errorCode =
+    err instanceof ZodError
+      ? "VALIDATION_ERROR"
+      : status >= 500
+        ? "INTERNAL_SERVER_ERROR"
+        : /^[A-Z][A-Z0-9_]+$/.test(err?.code || "")
+          ? err.code
+          : "REQUEST_ERROR";
+
+  res.locals.errorLogged = true;
+
+  const logMessage =
+    err instanceof ZodError
+      ? `Validation error on ${req.method} ${routePath}`
+      : err?.message || `Request failed with status ${status}`;
+
+  const logContext = {
+    module: moduleName,
+    operation: "api_error",
+    requestId,
+    method: req.method,
+    route: routePath,
+    status,
+    userId: req.user?.id || req.platformAdmin?.id || null,
+    tenantId: req.tenant?.id || null,
+    details: {
+      errorType,
+      errorCode,
+      ...(err instanceof ZodError
+        ? {
+            validationFields: err.errors.map((e) => e.path.join(".")),
+          }
+        : {}),
+    },
+    stack: status >= 500 || !err?.status ? err?.stack || null : null,
+  };
+
+  if (status >= 500) {
+    logger.error(logMessage, logContext);
+  } else {
+    logger.warn(logMessage, logContext);
+  }
+
   const messages: Record<number, string> = {
     400: "داده‌های ورودی یا فایل ارسالی معتبر نیستند.",
     401: "لطفاً دوباره وارد سامانه شوید.",
@@ -44,14 +97,7 @@ export function errorMiddleware(
   return res.status(status).json({
     success: false,
     error: {
-      code:
-        err instanceof ZodError
-          ? "VALIDATION_ERROR"
-          : status >= 500
-            ? "INTERNAL_SERVER_ERROR"
-            : /^[A-Z][A-Z0-9_]+$/.test(err.code || "")
-              ? err.code
-              : "REQUEST_ERROR",
+      code: errorCode,
       message:
         status >= 500
           ? "خطای داخلی سرور؛ لطفاً دوباره تلاش کنید."

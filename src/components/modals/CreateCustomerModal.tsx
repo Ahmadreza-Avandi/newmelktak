@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Lock, ShieldCheck, UserPlus, X } from "lucide-react";
-import { api } from "../../services/apiClient.ts";
+import { useAuth } from "../../context/AuthContext.tsx";
+import { offlineSync } from "../../services/offlineSync.ts";
 import { toWords } from "../../utils/jalaali.ts";
 
 export const CreateCustomerModal: React.FC<{
@@ -8,11 +9,13 @@ export const CreateCustomerModal: React.FC<{
   onClose: () => void;
   onSuccess: (customer: any) => void;
 }> = ({ isOpen, onClose, onSuccess }) => {
+  const { user, tenant } = useAuth();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
   const [customerType, setCustomerType] = useState("BUYER");
   const [visibility, setVisibility] = useState("AGENCY");
+  const [budgetMin, setBudgetMin] = useState("");
   const [budgetMax, setBudgetMax] = useState("");
   const [preferredAreaText, setPreferredAreaText] = useState("");
   const [temperature, setTemperature] = useState("WARM");
@@ -53,16 +56,46 @@ export const CreateCustomerModal: React.FC<{
 
     setSubmitting(true);
     try {
-      const res = await api.post("/api/v1/customers", {
+      const scope = tenant && user ? { tenantId: tenant.id, userId: user.id } : null;
+      if (!scope) {
+        setError("نشست کاربری معتبر نیست.");
+        return;
+      }
+      const payload = {
         first_name: firstName.trim(),
         last_name: lastName.trim(),
         phone: cleanedPhone,
         customer_type: customerType,
         visibility,
+        budget_min: budgetMin ? Number(budgetMin) : undefined,
         budget_max: budgetMax ? Number(budgetMax) : undefined,
         preferred_area_text: preferredAreaText.trim() || undefined,
         temperature,
         notes: notes.trim() || undefined,
+      };
+      const res = await offlineSync.mutate(scope, {
+        method: "POST",
+        path: "/api/v1/customers",
+        body: payload,
+        entityType: "CUSTOMER",
+        actionLabel: `ثبت متقاضی «${payload.first_name} ${payload.last_name}»`,
+        optimisticBuilder: (tempId) => {
+          const nowIso = new Date().toISOString();
+          return {
+            id: tempId,
+            ...payload,
+            display_name: `${payload.first_name} ${payload.last_name}`.trim(),
+            lead_status: "NEW",
+            is_archived: false,
+            branch_id: user?.branch_id || null,
+            branch_name: (user as any)?.branch_name || undefined,
+            assigned_agent_id: user?.id,
+            assigned_agent_name: user?.display_name,
+            created_at: nowIso,
+            updated_at: nowIso,
+            _offlinePending: true,
+          };
+        },
       });
       if (res.success && res.data) {
         onSuccess(res.data);
@@ -71,7 +104,7 @@ export const CreateCustomerModal: React.FC<{
         setError(res.error?.message || "خطا در ثبت اطلاعات مشتری در پایگاه داده.");
       }
     } catch {
-      setError("ارتباط با سرور برقرار نشد.");
+      setError("خطا در ثبت اطلاعات متقاضی.");
     } finally {
       setSubmitting(false);
     }
@@ -215,23 +248,43 @@ export const CreateCustomerModal: React.FC<{
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-[#667085] mb-1">
-              حداکثر سقف بودجه (تومان)
-            </label>
-            <input
-              type="number"
-              inputMode="numeric"
-              value={budgetMax}
-              onChange={(e) => setBudgetMax(e.target.value)}
-              placeholder="مثلاً 6000000000 (۶ میلیارد)"
-              className="w-full rounded-lg border border-slate-300 p-2 text-xs text-[#172033] focus:border-[#145DB5] outline-none font-mono"
-            />
-            {budgetMax && toWords(budgetMax) && (
-              <p className="mt-1 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
-                {toWords(budgetMax)}
-              </p>
-            )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div>
+              <label className="block text-xs font-semibold text-[#667085] mb-1">
+                حداقل بودجه (تومان)
+              </label>
+              <input
+                type="number"
+                inputMode="numeric"
+                value={budgetMin}
+                onChange={(e) => setBudgetMin(e.target.value)}
+                placeholder="مثلاً 7000000000"
+                className="w-full rounded-lg border border-slate-300 p-2 text-xs text-[#172033] focus:border-[#145DB5] outline-none font-mono"
+              />
+              {budgetMin && toWords(budgetMin) && (
+                <p className="mt-1 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
+                  {toWords(budgetMin)}
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-[#667085] mb-1">
+                حداکثر سقف بودجه (تومان)
+              </label>
+              <input
+                type="number"
+                inputMode="numeric"
+                value={budgetMax}
+                onChange={(e) => setBudgetMax(e.target.value)}
+                placeholder="مثلاً 9000000000"
+                className="w-full rounded-lg border border-slate-300 p-2 text-xs text-[#172033] focus:border-[#145DB5] outline-none font-mono"
+              />
+              {budgetMax && toWords(budgetMax) && (
+                <p className="mt-1 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
+                  {toWords(budgetMax)}
+                </p>
+              )}
+            </div>
           </div>
 
           <div>

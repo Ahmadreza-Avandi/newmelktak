@@ -64,7 +64,7 @@ export const CurrencyInput: React.FC<{
           onChange={handleChange}
           placeholder={placeholder}
           required={required}
-          className="w-full text-left font-mono font-bold text-xs tracking-wider rounded-xl border border-slate-300 bg-white p-2.5 text-[#172033] outline-none focus:border-[#145DB5] focus:ring-1 focus:ring-[#145DB5] disabled:bg-slate-100"
+          className="w-full text-left font-mono tabular-nums font-bold text-xs tracking-wider rounded-xl border border-slate-300 bg-white p-2.5 text-[#172033] outline-none focus:border-[#145DB5] focus:ring-1 focus:ring-[#145DB5] disabled:bg-slate-100"
         />
         {digits && (
           <button

@@ -254,6 +254,9 @@ export const CustomersPage: React.FC<{
           onRefresh={() => {
             if (i) i();
           }}
+          onDeleted={() => {
+            if (i) i();
+          }}
           onOpenQuickAddTask={(cust) => {
             g(null);
             r(cust);

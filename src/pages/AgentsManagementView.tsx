@@ -29,6 +29,7 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
 }) => {
   const { user } = useAuth();
   const [agents, setAgents] = useState<any[]>([]);
+  const [subscription, setSubscription] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -59,6 +60,7 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
 
   const [toggleTarget, setToggleTarget] = useState<any>(null);
   const [toggling, setToggling] = useState(false);
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   const [resetPwdOpen, setResetPwdOpen] = useState(false);
   const [resetPassword, setResetPassword] = useState("");
@@ -80,18 +82,24 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
   const loadAgents = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get("/api/v1/agency/agents");
+      const [res, subRes] = await Promise.all([
+        api.get("/api/v1/agency/agents"),
+        isManager ? api.get("/api/v1/agency/subscription") : Promise.resolve(null),
+      ]);
       if (res.success && res.data) {
         setAgents(res.data);
       } else {
         showToast(res.error?.message || "خطا در بارگذاری فهرست مشاوران.");
+      }
+      if (subRes && subRes.success && subRes.data) {
+        setSubscription(subRes.data);
       }
     } catch {
       showToast("خطا در برقراری ارتباط با سرور.");
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [isManager, showToast]);
 
   useEffect(() => {
     loadAgents();
@@ -160,6 +168,7 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
   const handleToggleStatus = async () => {
     if (!toggleTarget) return;
     setToggling(true);
+    setToggleError(null);
     const nextActive = !toggleTarget.is_active;
     try {
       const res = await api.patch(
@@ -175,14 +184,18 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
             : `حساب مشاور «${toggleTarget.display_name}» غیرفعال و نشست‌های فعال آن باطل گردید.`
         );
         setToggleTarget(null);
+        setToggleError(null);
         loadAgents();
         if (selectedAgentId === toggleTarget.id) {
           loadWorkload(selectedAgentId);
         }
       } else {
-        showToast(res.error?.message || "خطا در تغییر وضعیت مشاور.");
+        const msg = res.error?.message || "خطا در تغییر وضعیت مشاور.";
+        setToggleError(msg);
+        showToast(msg);
       }
     } catch {
+      setToggleError("خطا در ارسال درخواست به سرور.");
       showToast("خطا در ارسال درخواست به سرور.");
     } finally {
       setToggling(false);
@@ -467,7 +480,10 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
             {!isSelf && (
               <button
                 type="button"
-                onClick={() => setToggleTarget(selectedAgent)}
+                onClick={() => {
+                  setToggleError(null);
+                  setToggleTarget(selectedAgent);
+                }}
                 className={`w-full py-2.5 rounded-xl text-xs font-bold border transition active:scale-98 cursor-pointer ${
                   selectedAgent.is_active
                     ? "text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100"
@@ -552,7 +568,7 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
                       {prop.title}
                     </h4>
                     <p className="text-[11px] text-[#667085] mt-0.5">
-                      {prop.address.neighborhood || prop.city} •{" "}
+                      {prop.address?.neighborhood || "بدون محله"} •{" "}
                       {prop.area_sqm} متر
                     </p>
                   </div>
@@ -1063,6 +1079,11 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
           </span>
           <span className="text-lg font-black text-emerald-700">
             {activeCount}
+            {subscription?.max_agents ? (
+              <span className="text-[11px] font-bold text-emerald-600 mr-1">
+                از {subscription.max_agents}
+              </span>
+            ) : null}
           </span>
         </div>
         <div className="bg-slate-100 rounded-xl p-3 border border-slate-200 text-center">
@@ -1209,6 +1230,7 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
                       type="button"
                       onClick={(ev) => {
                         ev.stopPropagation();
+                        setToggleError(null);
                         setToggleTarget(agent);
                       }}
                       className={`text-[10px] font-bold px-2.5 py-1 rounded-lg transition active:scale-95 cursor-pointer ${
@@ -1258,6 +1280,18 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
                 {createError}
               </div>
             )}
+            {!createError &&
+              subscription?.max_agents &&
+              activeCount >= subscription.max_agents && (
+                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-semibold flex items-center gap-1.5">
+                  <TriangleAlert className="w-4 h-4 shrink-0" />
+                  <span>
+                    سقف مجاز کاربران فعال در {subscription.plan_title || "پلن فعلی"} (
+                    {subscription.max_agents} کاربر) تکمیل شده است؛ برای افزودن
+                    مشاور جدید پلن را ارتقا دهید.
+                  </span>
+                </div>
+              )}
 
             <form onSubmit={handleCreateSubmit} className="space-y-3">
               <div className="grid grid-cols-2 gap-2">
@@ -1408,6 +1442,12 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
                 ? "با غیرفعال‌سازی، دسترسی مشاور به سامانه فوراً مسدود شده و تمامی نشست‌های فعال آن باطل می‌گردد. فایل‌ها و سوابق کاری مشاور در سیستم باقی می‌ماند و قابل انتقال خواهد بود."
                 : "با فعال‌سازی مجدد، این مشاور می‌تواند مجدداً با رمز عبور خود وارد سامانه شود."}
             </p>
+            {toggleError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-1.5">
+                <TriangleAlert className="w-4 h-4 shrink-0" />
+                <span>{toggleError}</span>
+              </div>
+            )}
             <div className="flex items-center gap-2 pt-2">
               <button
                 type="button"
@@ -1427,7 +1467,10 @@ export const AgentsManagementView: React.FC<AgentsManagementViewProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setToggleTarget(null)}
+                onClick={() => {
+                  setToggleTarget(null);
+                  setToggleError(null);
+                }}
                 className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold cursor-pointer"
               >
                 انصراف

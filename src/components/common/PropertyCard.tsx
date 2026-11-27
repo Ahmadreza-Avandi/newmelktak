@@ -41,16 +41,18 @@ export const PropertyCard: React.FC<{
               <span>سراسری</span>
             </span>
           )}
+          {property._offlinePending && (
+            <span className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+              در انتظار همگام‌سازی
+            </span>
+          )}
         </div>
         <span className="text-[11px] font-bold text-slate-700 bg-slate-100/90 border border-slate-200 px-2 py-0.5 rounded-lg flex items-center gap-1">
           <MapPin className="w-3.5 h-3.5 text-[#145DB5]" />
           <span>
-            {[
-              property.address?.city,
-              property.address?.district || property.address?.neighborhood,
-            ]
-              .filter(Boolean)
-              .join("، ") || "موقعیت نامشخص"}
+            {property.address?.district ||
+              property.address?.neighborhood ||
+              "بدون محله"}
           </span>
         </span>
       </div>

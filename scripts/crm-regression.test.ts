@@ -12,6 +12,11 @@ import { agentRouter } from '../src/server/modules/agent/agent.routes.js';
 import { tasksRouter } from '../src/server/modules/tasks/tasks.routes.js';
 import { propertiesRouter } from '../src/server/modules/properties/properties.routes.js';
 import { transactionsRouter } from '../src/server/modules/transactions/transactions.routes.js';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { agencyRouter } from '../src/server/modules/agency/agency.routes.js';
+import { customersRouter } from '../src/server/modules/customers/customers.routes.js';
+import { HomePage } from '../src/pages/HomePage.js';
 import { errorMiddleware } from '../src/server/middleware/error.middleware.js';
 import { taskSchedule } from '../src/shared/task-schedule.js';
 
@@ -36,6 +41,8 @@ before(async () => {
   app.use('/home', agentRouter);
   app.use('/tasks', tasksRouter);
   app.use('/properties', propertiesRouter);
+  app.use('/agency', agencyRouter);
+  app.use('/customers', customersRouter);
   app.use('/transactions', transactionsRouter);
   app.use(errorMiddleware);
   server = app.listen(0, '127.0.0.1');
@@ -248,3 +255,300 @@ test('Service Worker bypasses authenticated APIs, uploads, third parties and non
     assert.equal(png.readUInt32BE(16), size); assert.equal(png.readUInt32BE(20), size);
   }
 });
+
+test('Properties omit default city and support listing and deleting neighborhoods with role scope', async () => {
+  const created = await request('/properties', 'POST', {
+    title: 'ملک تست محله قابل حذف',
+    property_type: 'APARTMENT',
+    listing_type: 'SALE',
+    area_sqm: 115,
+    price_total: 4200000000,
+    neighborhood: 'محله موقت تست',
+    district: 'محله موقت تست',
+    visibility: 'AGENCY',
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.data.address.city, '');
+  assert.equal(created.data.address.province, '');
+  assert.equal(created.data.address.neighborhood, 'محله موقت تست');
+
+  const second = await request('/properties', 'POST', {
+    title: 'ملک تست محله فردی',
+    property_type: 'APARTMENT',
+    listing_type: 'SALE',
+    area_sqm: 95,
+    price_total: 3100000000,
+    neighborhood: 'محله تکی تست',
+    visibility: 'AGENCY',
+  });
+  assert.equal(second.status, 201);
+
+  const listBefore = await request('/properties/neighborhoods');
+  assert.equal(listBefore.status, 200);
+  assert(listBefore.data.includes('محله موقت تست'));
+  assert(listBefore.data.includes('محله تکی تست'));
+
+  // Agent cannot delete a neighborhood on an agency property created/assigned to admin
+  const forbiddenDel = await request('/properties/neighborhoods?name=' + encodeURIComponent('محله موقت تست'), 'DELETE', undefined, agent.token);
+  assert.equal(forbiddenDel.status, 403);
+
+  // Admin deletes neighborhood globally within scope
+  const bulkDel = await request('/properties/neighborhoods?name=' + encodeURIComponent('محله موقت تست'), 'DELETE');
+  assert.equal(bulkDel.status, 200);
+  assert.equal(bulkDel.data.updatedCount, 1);
+
+  const reloaded = await request(`/properties/${created.data.id}`);
+  assert.equal(reloaded.status, 200);
+  assert.equal(reloaded.data.address.neighborhood, null);
+  assert.equal(reloaded.data.address.district, null);
+  assert.equal(reloaded.data.address.city, '');
+
+  // Individual property neighborhood clearing via PATCH
+  const singleClear = await request(`/properties/${second.data.id}`, 'PATCH', { neighborhood: null, district: null });
+  assert.equal(singleClear.status, 200);
+  assert.equal(singleClear.data.address.neighborhood, null);
+  assert.equal(singleClear.data.address.district, null);
+
+  const listAfter = await request('/properties/neighborhoods');
+  assert.equal(listAfter.status, 200);
+  assert(!listAfter.data.includes('محله موقت تست'));
+  assert(!listAfter.data.includes('محله تکی تست'));
+});
+
+test('Branch PATCH editing works cleanly and clears nullable fields without SQL syntax errors', async () => {
+  const branchesRes = await request('/agency/branches');
+  assert.equal(branchesRes.status, 200);
+  const mainBranch = branchesRes.data.find((b: any) => b.is_main) || branchesRes.data[0];
+  assert(mainBranch);
+
+  const patched = await request(`/agency/branches/${mainBranch.id}`, 'PATCH', {
+    name: 'شعبه مرکزی ویرایش‌شده',
+    branch_code: mainBranch.branch_code,
+    phone: '02144556677',
+    address: 'خیابان ولیعصر، پلاک ۱۰',
+    manager_user_id: admin.user.id,
+    is_main: true,
+    status: 'ACTIVE',
+  });
+  assert.equal(patched.status, 200, JSON.stringify(patched.error));
+  assert.equal(patched.data.name, 'شعبه مرکزی ویرایش‌شده');
+  assert.equal(patched.data.phone, '02144556677');
+  assert.equal(patched.data.manager_user_id, admin.user.id);
+
+  const cleared = await request(`/agency/branches/${mainBranch.id}`, 'PATCH', {
+    phone: null,
+    address: null,
+    manager_user_id: null,
+  });
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.error));
+  assert.equal(cleared.data.phone, null);
+  assert.equal(cleared.data.address, null);
+  assert.equal(cleared.data.manager_user_id, null);
+});
+
+test('Subscription plans enforce STARTER (1/3), PROFESSIONAL (3/5), ENTERPRISE_PRO (5+/8+) quotas, identical modules, and no prices', async () => {
+  const createdTenant = await db.createPlatformTenant({
+    agency_code: 'QUOTA1',
+    name: 'آژانس تست سهمیه',
+    plan_code: 'STARTER',
+    admin_username: 'qadmin',
+    admin_password: 'DemoPassword123!',
+    admin_first_name: 'مدیر',
+    admin_last_name: 'تست',
+    admin_phone: '09123334455',
+    trial_days: 30,
+  }, 'platform-test');
+
+  const qLogin = await request('/auth/login', 'POST', {
+    agency_code: 'QUOTA1',
+    username: 'qadmin',
+    password: 'DemoPassword123!',
+  }, '');
+  assert.equal(qLogin.status, 200);
+  const qToken = qLogin.data.token;
+
+  const subRes = await request('/agency/subscription', 'GET', undefined, qToken);
+  assert.equal(subRes.status, 200);
+  assert.equal(subRes.data.max_branches, 1);
+  assert.equal(subRes.data.max_agents, 3);
+  assert.equal(subRes.data.plans_catalog.length, 3);
+
+  const featureSignature = JSON.stringify(subRes.data.plans_catalog[0].features);
+  for (const plan of subRes.data.plans_catalog) {
+    assert.equal(plan.price_annual, undefined);
+    assert.equal(JSON.stringify(plan.features), featureSignature);
+  }
+  assert.equal(subRes.data.plans_catalog[0].max_branches, 1);
+  assert.equal(subRes.data.plans_catalog[0].max_agents, 3);
+  assert.equal(subRes.data.plans_catalog[1].max_branches, 3);
+  assert.equal(subRes.data.plans_catalog[1].max_agents, 5);
+  assert(subRes.data.plans_catalog[2].max_branches >= 5);
+  assert(subRes.data.plans_catalog[2].max_agents >= 8);
+  assert.equal(subRes.data.plans_catalog[2].capacity_label, '۵ شعبه به بالا • ۸ مشاور به بالا');
+
+  // Adding a 2nd branch on STARTER must be blocked with 403 and must not insert branch
+  const extraBranch = await request('/agency/branches', 'POST', {
+    name: 'شعبه دوم غیرمجاز',
+    branch_code: 'BR02',
+  }, qToken);
+  assert.equal(extraBranch.status, 403);
+  assert.equal(extraBranch.error.code, 'PLAN_BRANCH_LIMIT_EXCEEDED');
+  assert(extraBranch.error.message.includes('ارتقا'));
+  assert.equal((await request('/agency/branches', 'GET', undefined, qToken)).data.length, 1);
+
+  // Admin counts as 1 active user -> allow 2 more agents (total 3), block 4th
+  const ag1 = await request('/agency/agents', 'POST', {
+    first_name: 'مشاور', last_name: 'اول', username: 'qagent1', phone: '09121110001', password: 'Password123!', role_code: 'AGENT'
+  }, qToken);
+  assert.equal(ag1.status, 201);
+  const ag2 = await request('/agency/agents', 'POST', {
+    first_name: 'مشاور', last_name: 'دوم', username: 'qagent2', phone: '09121110002', password: 'Password123!', role_code: 'AGENT'
+  }, qToken);
+  assert.equal(ag2.status, 201);
+  const ag3Blocked = await request('/agency/agents', 'POST', {
+    first_name: 'مشاور', last_name: 'سوم', username: 'qagent3', phone: '09121110003', password: 'Password123!', role_code: 'AGENT'
+  }, qToken);
+  assert.equal(ag3Blocked.status, 403);
+  assert.equal(ag3Blocked.error.code, 'PLAN_AGENT_LIMIT_EXCEEDED');
+
+  // Deactivate ag2 -> add ag3 -> reactivating ag2 must fail because active users = 3/3
+  assert.equal((await request(`/agency/agents/${ag2.data.id}/status`, 'PATCH', { is_active: false }, qToken)).status, 200);
+  const ag3Allowed = await request('/agency/agents', 'POST', {
+    first_name: 'مشاور', last_name: 'سوم', username: 'qagent3', phone: '09121110003', password: 'Password123!', role_code: 'AGENT'
+  }, qToken);
+  assert.equal(ag3Allowed.status, 201);
+  const reactivateBlocked = await request(`/agency/agents/${ag2.data.id}/status`, 'PATCH', { is_active: true }, qToken);
+  assert.equal(reactivateBlocked.status, 403);
+  assert.equal(reactivateBlocked.error.code, 'PLAN_AGENT_LIMIT_EXCEEDED');
+
+  // Upgrade to PROFESSIONAL (3 branches / 5 agents) -> branch 2 and reactivating ag2 succeed
+  await db.updatePlatformTenantSubscription(createdTenant.id, { plan_code: 'PROFESSIONAL', max_branches: 3, max_agents: 5 }, 'platform-test');
+  const branch2 = await request('/agency/branches', 'POST', { name: 'شعبه دوم مجاز', branch_code: 'BR02' }, qToken);
+  assert.equal(branch2.status, 201);
+  assert.equal((await request(`/agency/agents/${ag2.data.id}/status`, 'PATCH', { is_active: true }, qToken)).status, 200);
+
+  // Verify SubscriptionView JSX contains no price text or تومان
+  const subSrc = fs.readFileSync('src/pages/SubscriptionView.tsx', 'utf8');
+  assert(!subSrc.includes('تومان'));
+  assert(!subSrc.includes('price_annual'));
+  assert(!subSrc.includes('calculatePrice'));
+});
+
+test('Matching algorithm pairs an 8B ACTIVE property with a customer having 7B-9B budget range', async () => {
+  const prop8B = await request('/properties', 'POST', {
+    title: 'آپارتمان ۸ میلیاردی منطبق',
+    property_type: 'APARTMENT',
+    listing_type: 'SALE',
+    area_sqm: 130,
+    price_total: 8_000_000_000,
+    neighborhood: 'گوهردشت',
+    visibility: 'AGENCY',
+  });
+  assert.equal(prop8B.status, 201);
+
+  const prop25B = await request('/properties', 'POST', {
+    title: 'ملک ۲۵ میلیاردی خارج از بودجه',
+    property_type: 'APARTMENT',
+    listing_type: 'SALE',
+    area_sqm: 300,
+    price_total: 25_000_000_000,
+    neighborhood: 'گوهردشت',
+    visibility: 'AGENCY',
+  });
+  assert.equal(prop25B.status, 201);
+
+  const buyer = await request('/customers', 'POST', {
+    first_name: 'سارا',
+    last_name: 'محمدی',
+    phone: '09129998877',
+    customer_type: 'BUYER',
+    visibility: 'AGENCY',
+    budget_min: 7_000_000_000,
+    budget_max: 9_000_000_000,
+    preferred_area_text: 'گوهردشت',
+  });
+  assert.equal(buyer.status, 201);
+
+  const matchesRes = await request(`/customers/${buyer.data.id}/matches`);
+  assert.equal(matchesRes.status, 200);
+  const matched8B = matchesRes.data.find((m: any) => m.property.id === prop8B.data.id);
+  assert(matched8B, '8B ACTIVE property should appear in customer matched files');
+  assert(matched8B.score >= 70);
+  assert(!matchesRes.data.some((m: any) => m.property.id === prop25B.data.id), '25B property must not match 7B-9B customer');
+
+  const propMatchesRes = await request(`/properties/${prop8B.data.id}/matches`);
+  assert.equal(propMatchesRes.status, 200);
+  assert(propMatchesRes.data.some((m: any) => m.customer.id === buyer.data.id));
+
+  // Add explicit customer requirement and verify matching still includes 8B property and excludes 25B
+  const reqRes = await request(`/customers/${buyer.data.id}/requirements`, 'POST', {
+    property_type: 'APARTMENT',
+    listing_type: 'SALE',
+    min_budget: 7_000_000_000,
+    max_budget: 9_000_000_000,
+  });
+  assert.equal(reqRes.status, 201);
+  const matchesAfterReq = await request(`/customers/${buyer.data.id}/matches`);
+  assert.equal(matchesAfterReq.status, 200);
+  const matchedWithReq = matchesAfterReq.data.find((m: any) => m.property.id === prop8B.data.id);
+  assert(matchedWithReq && matchedWithReq.score >= 90);
+  assert(!matchesAfterReq.data.some((m: any) => m.property.id === prop25B.data.id));
+});
+
+test('HomePage displays at most 3 items per scheduled tasks, coordinated visits, and activities sections with بیشتر buttons', () => {
+  const mkTasks = (prefix: string) =>
+    Array.from({ length: 5 }, (_, idx) => ({
+      id: `${prefix}-${idx + 1}`,
+      title: `${prefix} آیتم شماره ${idx + 1}`,
+      due_at: new Date().toISOString(),
+      status: 'PENDING',
+      priority: 'MEDIUM',
+    }));
+  const mkVisits = () =>
+    Array.from({ length: 5 }, (_, idx) => ({
+      id: `visit-${idx + 1}`,
+      scheduled_at: new Date().toISOString(),
+      customer_name: `مشتری بازدید ${idx + 1}`,
+      property_code: `P-${idx + 1}`,
+      property_title: `ملک بازدید ${idx + 1}`,
+    }));
+  const mkActivities = () =>
+    Array.from({ length: 5 }, (_, idx) => ({
+      id: `act-${idx + 1}`,
+      title: `رویداد سیستم ${idx + 1}`,
+      description: `توضیح رویداد ${idx + 1}`,
+      created_at: new Date().toISOString(),
+    }));
+
+  const html = renderToStaticMarkup(
+    React.createElement(HomePage, {
+      data: {
+        agent: { display_name: 'مشاور تست', agency_name: 'دفتر تست' },
+        metrics: { overdue_count: 5, today_count: 5, upcoming_visits_count: 5 },
+        overdueTasks: mkTasks('عقب‌افتاده'),
+        todayTasks: mkTasks('امروز'),
+        upcomingVisits: mkVisits(),
+        smartMatches: [],
+        recentActivities: mkActivities(),
+      },
+      onOpenQuickAdd: () => {},
+      onOpenSearch: () => {},
+      onNavigateTab: () => {},
+      onCompleteTask: () => {},
+    })
+  );
+
+  assert(html.includes('عقب‌افتاده آیتم شماره 3'));
+  assert(!html.includes('عقب‌افتاده آیتم شماره 4'));
+  assert(html.includes('امروز آیتم شماره 3'));
+  assert(!html.includes('امروز آیتم شماره 4'));
+  assert(html.includes('ملک بازدید 3'));
+  assert(!html.includes('ملک بازدید 4'));
+  assert(html.includes('رویداد سیستم 3'));
+  assert(!html.includes('رویداد سیستم 4'));
+
+  const moreButtonsCount = html.match(/بیشتر \(2 مورد دیگر\)/g)?.length || 0;
+  assert.equal(moreButtonsCount, 4);
+});
+
+

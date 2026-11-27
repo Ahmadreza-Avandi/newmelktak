@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Building2, SquareCheckBig, User, X } from "lucide-react";
 import { api } from "../../services/apiClient.ts";
+import { useAuth } from "../../context/AuthContext.tsx";
+import { offlineSync } from "../../services/offlineSync.ts";
 import { PersianDatePicker } from "../common/PersianDatePicker.tsx";
 
 export const TASK_TYPE_OPTIONS = [
@@ -19,6 +21,7 @@ export const CreateTaskModal: React.FC<{
   onSuccess: (task: any) => void;
   targetCustomer?: any;
 }> = ({ isOpen, onClose, onSuccess, targetCustomer }) => {
+  const { user, tenant } = useAuth();
   const [title, setTitle] = useState("");
   const [type, setType] = useState("FOLLOW_UP");
   const [description, setDescription] = useState("");
@@ -49,19 +52,49 @@ export const CreateTaskModal: React.FC<{
   }, [targetCustomer, isOpen]);
 
   useEffect(() => {
-    if (isOpen) {
-      api.get("/api/v1/customers").then((res) => {
+    if (!isOpen) return;
+    const scope = tenant && user ? { tenantId: tenant.id, userId: user.id } : null;
+    const loadOfflineDropdowns = async () => {
+      if (!scope) return;
+      const [cCache, pCache] = await Promise.all([
+        offlineSync.loadSnapshot<any[]>(scope, "customers", "ALL"),
+        offlineSync.loadSnapshot<any[]>(scope, "properties", "ALL"),
+      ]);
+      if (cCache) setCustomers(cCache.filter((c: any) => !c.is_archived));
+      if (pCache) setProperties(pCache.filter((p: any) => !p.is_archived && p.status !== "ARCHIVED"));
+    };
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      void loadOfflineDropdowns();
+      return;
+    }
+
+    api
+      .get("/api/v1/customers")
+      .then((res) => {
         if (res.success && res.data) {
           setCustomers(res.data.filter((c: any) => !c.is_archived));
+        } else if (scope) {
+          offlineSync
+            .loadSnapshot<any[]>(scope, "customers", "ALL")
+            .then((cCache) => cCache && setCustomers(cCache.filter((c: any) => !c.is_archived)));
         }
-      });
-      api.get("/api/v1/properties").then((res) => {
+      })
+      .catch(() => void loadOfflineDropdowns());
+
+    api
+      .get("/api/v1/properties")
+      .then((res) => {
         if (res.success && res.data) {
           setProperties(res.data.filter((p: any) => !p.is_archived));
+        } else if (scope) {
+          offlineSync
+            .loadSnapshot<any[]>(scope, "properties", "ALL")
+            .then((pCache) => pCache && setProperties(pCache.filter((p: any) => !p.is_archived && p.status !== "ARCHIVED")));
         }
-      });
-    }
-  }, [isOpen]);
+      })
+      .catch(() => void loadOfflineDropdowns());
+  }, [isOpen, tenant?.id, user?.id]);
 
   if (!isOpen) return null;
 
@@ -77,9 +110,14 @@ export const CreateTaskModal: React.FC<{
       setError("لطفاً تاریخ و ساعت موعد پیگیری را مشخص نمایید.");
       return;
     }
+    const scope = tenant && user ? { tenantId: tenant.id, userId: user.id } : null;
+    if (!scope) {
+      setError("نشست کاربری معتبر نیست.");
+      return;
+    }
     setSubmitting(true);
     try {
-      const res = await api.post("/api/v1/tasks", {
+      const payload = {
         title: title.trim(),
         description: description.trim() || undefined,
         customer_id: customerId || undefined,
@@ -88,6 +126,32 @@ export const CreateTaskModal: React.FC<{
         end_at: hasEndAt ? endAt : undefined,
         priority,
         type,
+      };
+      const matchedCustomer = targetCustomer || customers.find((c) => c.id === customerId);
+      const matchedProperty = properties.find((p) => p.id === propertyId);
+      const res = await offlineSync.mutate(scope, {
+        method: "POST",
+        path: "/api/v1/tasks",
+        body: payload,
+        entityType: "TASK",
+        actionLabel: `ثبت پیگیری «${payload.title}»`,
+        optimisticBuilder: (tempId) => {
+          const nowIso = new Date().toISOString();
+          return {
+            id: tempId,
+            ...payload,
+            status: "TODO",
+            assigned_to_user_id: user?.id,
+            assigned_to_name: user?.display_name,
+            customer_name: matchedCustomer?.display_name,
+            customer_phone: matchedCustomer?.phone,
+            property_title: matchedProperty?.title,
+            property_code: matchedProperty?.code,
+            created_at: nowIso,
+            updated_at: nowIso,
+            _offlinePending: true,
+          };
+        },
       });
       if (res.success && res.data) {
         onSuccess(res.data);
@@ -96,7 +160,7 @@ export const CreateTaskModal: React.FC<{
         setError(res.error?.message || "خطا در ثبت پیگیری در پایگاه داده.");
       }
     } catch {
-      setError("ارتباط با سرور برقرار نشد.");
+      setError("خطا در ثبت پیگیری.");
     } finally {
       setSubmitting(false);
     }

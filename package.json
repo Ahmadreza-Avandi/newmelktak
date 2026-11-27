@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --import tsx server.ts",
+    "dev": "node --env-file-if-exists=.env --import tsx server.ts --port 3000",
     "db:start": "pg_ctl -D ./data/postgres_local -l ./data/postgres_local/server.log start",
     "db:stop": "pg_ctl -D ./data/postgres_local stop -m fast",
     "db:status": "pg_ctl -D ./data/postgres_local status",
@@ -15,6 +15,7 @@
   "dependencies": {
     "@electric-sql/pglite": "^0.2.14",
     "@types/pg": "^8.23.1",
+    "@types/web-push": "^3.6.4",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
@@ -31,6 +32,7 @@
     "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "web-push": "^4.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

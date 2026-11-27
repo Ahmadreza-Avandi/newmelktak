@@ -29,6 +29,7 @@ export const BranchesManagementView: React.FC<BranchesManagementViewProps> = ({
   const canManageBranches = useOfficeAdmin();
   const [branches, setBranches] = useState<any[]>([]);
   const [agents, setAgents] = useState<any[]>([]);
+  const [subscription, setSubscription] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -59,9 +60,10 @@ export const BranchesManagementView: React.FC<BranchesManagementViewProps> = ({
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [branchesRes, agentsRes] = await Promise.all([
+      const [branchesRes, agentsRes, subRes] = await Promise.all([
         api.get("/api/v1/agency/branches"),
         api.get("/api/v1/agency/agents"),
+        canManageBranches ? api.get("/api/v1/agency/subscription") : Promise.resolve(null),
       ]);
       if (branchesRes.success && branchesRes.data) {
         setBranches(branchesRes.data);
@@ -69,12 +71,15 @@ export const BranchesManagementView: React.FC<BranchesManagementViewProps> = ({
       if (agentsRes.success && agentsRes.data) {
         setAgents(agentsRes.data);
       }
+      if (subRes && subRes.success && subRes.data) {
+        setSubscription(subRes.data);
+      }
     } catch {
       showToast("خطا در بارگذاری اطلاعات شعب و کاربران.");
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [canManageBranches, showToast]);
 
   useEffect(() => {
     loadData();
@@ -264,6 +269,7 @@ export const BranchesManagementView: React.FC<BranchesManagementViewProps> = ({
           </div>
           <span className="text-[10px] text-emerald-600 font-semibold">
             {branches.filter((b) => b.status === "ACTIVE").length} فعال
+            {subscription?.max_branches ? ` (سقف پلن: ${subscription.max_branches})` : ""}
           </span>
         </div>
         <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
@@ -448,6 +454,19 @@ export const BranchesManagementView: React.FC<BranchesManagementViewProps> = ({
                 <span>{createError}</span>
               </div>
             )}
+            {!createError &&
+              subscription?.max_branches &&
+              branches.filter((b) => b.status === "ACTIVE").length >=
+                subscription.max_branches && (
+                <div className="my-3 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs flex items-center gap-1.5">
+                  <TriangleAlert className="w-4 h-4 shrink-0" />
+                  <span>
+                    سقف مجاز شعب فعال در {subscription.plan_title || "پلن فعلی"} (
+                    {subscription.max_branches} شعبه) تکمیل شده است؛ برای افزودن
+                    شعبه جدید پلن خود را ارتقا دهید.
+                  </span>
+                </div>
+              )}
             <form onSubmit={handleCreateSubmit} className="space-y-3.5 mt-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">

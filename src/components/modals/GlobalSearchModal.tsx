@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { Building2, Search, Users, X } from "lucide-react";
+import React, { useState, useEffect, useCallback } from "react";
+import { Building2, Search, Trash2, Users, X } from "lucide-react";
 import { api } from "../../services/apiClient.ts";
 import { PropertyCard } from "../common/PropertyCard.tsx";
 import { CustomerCard } from "../common/CustomerCard.tsx";
@@ -10,18 +10,41 @@ export const GlobalSearchModal: React.FC<{
   onSelectProperty?: (property: any) => void;
   onSelectCustomer?: (customer: any) => void;
   onFollowUpCustomer?: (customer: any) => void;
+  onNeighborhoodDeleted?: () => void;
 }> = ({
   isOpen,
   onClose,
   onSelectProperty,
   onSelectCustomer,
   onFollowUpCustomer,
+  onNeighborhoodDeleted,
 }) => {
   const [query, setQuery] = useState("");
   const [properties, setProperties] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
+  const [neighborhoods, setNeighborhoods] = useState<string[]>([]);
+  const [confirmDeleteHood, setConfirmDeleteHood] = useState<string | null>(null);
+  const [deletingHood, setDeletingHood] = useState(false);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+
+  const loadNeighborhoods = useCallback(async () => {
+    try {
+      const res = await api.get("/api/v1/properties/neighborhoods");
+      if (res.success && Array.isArray(res.data)) {
+        setNeighborhoods(res.data);
+      }
+    } catch {
+      // keep existing state on transient fetch error
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      loadNeighborhoods();
+      setConfirmDeleteHood(null);
+    }
+  }, [isOpen, loadNeighborhoods]);
 
   useEffect(() => {
     if (!query.trim()) {
@@ -52,6 +75,23 @@ export const GlobalSearchModal: React.FC<{
 
   if (!isOpen) return null;
 
+  const handleDeleteHood = async (hood: string) => {
+    setDeletingHood(true);
+    try {
+      const res = await api.delete(
+        `/api/v1/properties/neighborhoods?name=${encodeURIComponent(hood)}`
+      );
+      if (res.success) {
+        setNeighborhoods((prev) => prev.filter((item) => item !== hood));
+        if (query === hood) setQuery("");
+        setConfirmDeleteHood(null);
+        onNeighborhoodDeleted?.();
+      }
+    } finally {
+      setDeletingHood(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-xs pt-4 sm:pt-10">
       <div className="w-full max-w-md max-h-[88vh] flex flex-col bg-white rounded-2xl shadow-2xl overflow-hidden">
@@ -81,24 +121,72 @@ export const GlobalSearchModal: React.FC<{
           </button>
         </div>
 
-        <div className="px-3.5 py-2 bg-[#F7F9FC] border-b border-slate-100 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-          <span className="text-[10px] text-[#145DB5] font-extrabold shrink-0">
-            فیلتر محله:
-          </span>
-          {["گلشهر", "عظیمیه", "جهان‌شهر", "مهرشهر", "گوهردشت"].map((hood) => (
-            <button
-              key={hood}
-              onClick={() => setQuery(hood)}
-              className={`text-[10px] px-2 py-0.5 rounded-full border transition shrink-0 ${
-                query === hood
-                  ? "bg-[#145DB5] text-white border-[#145DB5] font-bold"
-                  : "bg-white border-slate-200 text-[#172033] hover:border-[#145DB5]"
-              }`}
-            >
-              محله {hood}
-            </button>
-          ))}
-        </div>
+        {neighborhoods.length > 0 && (
+          <div className="px-3.5 py-2 bg-[#F7F9FC] border-b border-slate-100 space-y-2">
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+              <span className="text-[10px] text-[#145DB5] font-extrabold shrink-0">
+                فیلتر محله:
+              </span>
+              {neighborhoods.map((hood) => (
+                <div
+                  key={hood}
+                  className={`inline-flex items-center rounded-full border text-[10px] shrink-0 overflow-hidden transition ${
+                    query === hood
+                      ? "bg-[#145DB5] text-white border-[#145DB5] font-bold"
+                      : "bg-white border-slate-200 text-[#172033]"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setQuery(query === hood ? "" : hood)}
+                    className="px-2 py-0.5 cursor-pointer"
+                  >
+                    محله {hood}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setConfirmDeleteHood(confirmDeleteHood === hood ? null : hood)
+                    }
+                    title={`حذف محله ${hood}`}
+                    aria-label={`حذف محله ${hood}`}
+                    className={`px-1.5 py-0.5 border-r cursor-pointer ${
+                      query === hood
+                        ? "border-blue-300 text-white hover:bg-rose-700"
+                        : "border-slate-200 text-rose-600 hover:bg-rose-100"
+                    }`}
+                  >
+                    <Trash2 className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {confirmDeleteHood && (
+              <div className="flex items-center justify-between gap-2 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5 text-[10px]">
+                <span className="text-rose-800 font-semibold">
+                  حذف محله «{confirmDeleteHood}» تایید شود؟
+                </span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    disabled={deletingHood}
+                    onClick={() => handleDeleteHood(confirmDeleteHood)}
+                    className="px-2 py-0.5 rounded bg-rose-600 text-white font-bold hover:bg-rose-700 cursor-pointer"
+                  >
+                    {deletingHood ? "..." : "حذف"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteHood(null)}
+                    className="px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-600 font-semibold cursor-pointer"
+                  >
+                    لغو
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto p-3.5 space-y-4">
           {loading && (

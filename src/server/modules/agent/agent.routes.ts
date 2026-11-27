@@ -29,7 +29,7 @@ agentRouter.get("/home", async (req, res, next) => {
       postgresDb.getProperties(tenantId, { ...branchParam }, req.user),
       postgresDb.getCustomers(tenantId, { ...branchParam }, req.user),
       postgresDb.calculateSmartMatches(tenantId, req.user),
-      postgresDb.getRecentActivities(tenantId, 6)
+      postgresDb.getRecentActivities(tenantId, 15)
     ]);
 
     const { overdueTasks, todayTasks, upcomingVisits: visits } = taskSchedule(

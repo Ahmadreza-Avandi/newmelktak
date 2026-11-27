@@ -3,19 +3,27 @@ import { Router } from "express";
 import { postgresDb } from "../../db/postgres.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { subscriptionEnforcementMiddleware } from "../../middleware/subscription.middleware.js";
+import {
+  idempotencyMiddleware,
+  parseExpectedUpdatedAt,
+  isRecordModifiedSince,
+} from "../../middleware/idempotency.middleware.js";
 import { storageService } from "../../storage/storage.service.js";
+import { logger } from "../../logging/logger.js";
 import {
   QuickAddPropertySchema,
   PropertyStatusSchema,
   UpdatePropertySchema,
   LinkPropertyOwnerSchema,
   AssignRecordSchema,
+  DeleteNeighborhoodSchema,
 } from "../../../shared/validation.js";
 
 const propertiesRouter = Router();
 
 propertiesRouter.use(authMiddleware);
 propertiesRouter.use(subscriptionEnforcementMiddleware);
+propertiesRouter.use(idempotencyMiddleware);
 
 propertiesRouter.get("/", async (req, res, next) => {
   try {
@@ -87,6 +95,60 @@ propertiesRouter.get("/", async (req, res, next) => {
         limit,
         total_pages: Math.ceil(total / limit) || 1,
       },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+propertiesRouter.get("/neighborhoods", async (req, res, next) => {
+  try {
+    const neighborhoods = await postgresDb.getPropertyNeighborhoods(
+      req.tenant.id,
+      req.user,
+    );
+    return res.json({ success: true, data: neighborhoods });
+  } catch (error) {
+    next(error);
+  }
+});
+
+propertiesRouter.delete("/neighborhoods", async (req, res, next) => {
+  try {
+    const rawName = (req.query.name as string) || req.body?.name || "";
+    const validated = DeleteNeighborhoodSchema.parse({ name: rawName });
+    const result = await postgresDb.deletePropertyNeighborhood(
+      req.tenant.id,
+      req.user.id,
+      req.user.role_code,
+      validated.name,
+      req.user,
+    );
+    return res.json({
+      success: true,
+      data: result,
+      message: `محله «${validated.name}» با موفقیت حذف شد.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+propertiesRouter.delete("/neighborhoods/:name", async (req, res, next) => {
+  try {
+    const rawName = decodeURIComponent(req.params.name || "");
+    const validated = DeleteNeighborhoodSchema.parse({ name: rawName });
+    const result = await postgresDb.deletePropertyNeighborhood(
+      req.tenant.id,
+      req.user.id,
+      req.user.role_code,
+      validated.name,
+      req.user,
+    );
+    return res.json({
+      success: true,
+      data: result,
+      message: `محله «${validated.name}» با موفقیت حذف شد.`,
     });
   } catch (error) {
     next(error);
@@ -165,6 +227,18 @@ propertiesRouter.patch("/:id", async (req, res, next) => {
           code: "PROPERTY_NOT_FOUND",
           message: "ملک مورد نظر یافت نشد یا دسترسی مجاز نیست.",
         },
+      });
+    }
+
+    const expectedUpdatedAt = parseExpectedUpdatedAt(req);
+    if (isRecordModifiedSince(existing.updated_at, expectedUpdatedAt)) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: "SYNC_CONFLICT",
+          message: "اطلاعات این ملک پیش از همگام‌سازی توسط کاربر دیگری تغییر کرده است.",
+        },
+        data: { server_record: existing },
       });
     }
 
@@ -301,6 +375,21 @@ propertiesRouter.patch("/:id/status", async (req, res, next) => {
       });
     }
 
+    const expectedUpdatedAt = parseExpectedUpdatedAt(req);
+    if (
+      isRecordModifiedSince(property.updated_at, expectedUpdatedAt) &&
+      property.status !== status
+    ) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: "SYNC_CONFLICT",
+          message: "وضعیت این ملک پیش از همگام‌سازی تغییر کرده است.",
+        },
+        data: { server_record: property },
+      });
+    }
+
     const updated = await postgresDb.updatePropertyStatus(
       tenantId,
       req.params.id,
@@ -346,6 +435,35 @@ propertiesRouter.post("/:id/archive", async (req, res, next) => {
       success: true,
       data: archived,
       message: "فایل ملکی با موفقیت به بایگانی منتقل شد.",
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+propertiesRouter.delete("/:id", async (req, res, next) => {
+  try {
+    const result = await postgresDb.deleteProperty(
+      req.tenant.id,
+      req.params.id,
+      req.user.id,
+      req.user.role_code,
+    );
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: "PROPERTY_NOT_FOUND",
+          message: "ملک مورد نظر یافت نشد یا دسترسی مجاز نیست.",
+        },
+      });
+    }
+    return res.json({
+      success: true,
+      data: result,
+      message: result.archived
+        ? "این ملک دارای سابقه معامله بود و به جای حذف کامل به بایگانی منتقل شد."
+        : "فایل ملکی با موفقیت حذف شد.",
     });
   } catch (error) {
     next(error);
@@ -428,6 +546,16 @@ propertiesRouter.post("/:id/media", async (req, res, next) => {
     }
 
     if (!finalUrl) {
+      logger.warn("Property media upload missing url or content", {
+        module: "properties",
+        operation: "property_media_invalid",
+        requestId: req.requestId,
+        method: req.method,
+        route: "/api/v1/properties/:id/media",
+        status: 400,
+        userId: req.user?.id,
+        tenantId,
+      });
       return res.status(400).json({
         success: false,
         error: {
@@ -444,6 +572,16 @@ propertiesRouter.post("/:id/media", async (req, res, next) => {
         /^https:\/\//i.test(finalUrl)
       )
     ) {
+      logger.warn("Property media upload rejected invalid url", {
+        module: "properties",
+        operation: "property_media_invalid_url",
+        requestId: req.requestId,
+        method: req.method,
+        route: "/api/v1/properties/:id/media",
+        status: 400,
+        userId: req.user?.id,
+        tenantId,
+      });
       return res
         .status(400)
         .json({
@@ -665,6 +803,7 @@ propertiesRouter.get("/:id/matches", async (req, res, next) => {
     const matches = await postgresDb.getPropertyMatches(
       tenantId,
       req.params.id,
+      req.user,
     );
     return res.json({
       success: true,

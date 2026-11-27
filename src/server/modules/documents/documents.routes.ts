@@ -13,6 +13,7 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import { storageService } from "../../storage/storage.service.js";
+import { logger } from "../../logging/logger.js";
 
 const privateDocsDir = path.resolve(
   process.env.DATA_DIR || path.join(process.cwd(), "data"),
@@ -55,8 +56,11 @@ const upload = multer({
       cb(null, true);
     } else {
       cb(
-        new Error(
-          "فرمت فایل مجاز نیست. فقط تصاویر JPG/PNG و فایل‌های PDF پذیرفته می‌شوند.",
+        Object.assign(
+          new Error(
+            "فرمت فایل مجاز نیست. فقط تصاویر JPG/PNG و فایل‌های PDF پذیرفته می‌شوند.",
+          ),
+          { status: 400, code: "INVALID_FILE_TYPE" },
         ),
       );
     }
@@ -224,6 +228,16 @@ documentsRouter.post(
         } catch {}
       }
       if (err.code === "LIMIT_FILE_SIZE") {
+        logger.warn("Document upload rejected due to file size limit", {
+          module: "documents",
+          operation: "document_upload_too_large",
+          requestId: req.requestId,
+          method: req.method,
+          route: "/api/v1/documents/upload",
+          status: 400,
+          userId: req.user?.id,
+          tenantId: req.tenant?.id,
+        });
         return res.status(400).json({
           success: false,
           error: {
@@ -330,6 +344,16 @@ documentsRouter.post(
         } catch {}
       }
       if (err.code === "LIMIT_FILE_SIZE") {
+        logger.warn("Property document upload rejected due to file size limit", {
+          module: "documents",
+          operation: "document_upload_too_large",
+          requestId: req.requestId,
+          method: req.method,
+          route: "/api/v1/documents/properties/:propertyId",
+          status: 400,
+          userId: req.user?.id,
+          tenantId: req.tenant?.id,
+        });
         return res.status(400).json({
           success: false,
           error: {
@@ -436,6 +460,16 @@ documentsRouter.post(
         } catch {}
       }
       if (err.code === "LIMIT_FILE_SIZE") {
+        logger.warn("Customer document upload rejected due to file size limit", {
+          module: "documents",
+          operation: "document_upload_too_large",
+          requestId: req.requestId,
+          method: req.method,
+          route: "/api/v1/documents/customers/:customerId",
+          status: 400,
+          userId: req.user?.id,
+          tenantId: req.tenant?.id,
+        });
         return res.status(400).json({
           success: false,
           error: {
@@ -522,6 +556,17 @@ documentsRouter.get(
       }
 
       if (!filePath || !fs.existsSync(filePath)) {
+        logger.error("Document file missing from storage during download", {
+          module: "documents",
+          operation: "document_download_file_missing",
+          requestId: req.requestId,
+          method: req.method,
+          route: "/api/v1/documents/:id/download",
+          status: 404,
+          userId: req.user?.id,
+          tenantId,
+          details: { documentId, storageKey: path.basename(doc.storage_key || "") },
+        });
         return res
           .status(404)
           .json({
@@ -557,7 +602,25 @@ documentsRouter.get(
         "Content-Disposition",
         `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodedFileName}`,
       );
-      return res.sendFile(filePath);
+      return res.sendFile(filePath, (sendErr) => {
+        if (sendErr) {
+          logger.error("Error streaming document file on download", {
+            module: "documents",
+            operation: "document_download_stream_failed",
+            requestId: req.requestId,
+            method: req.method,
+            route: "/api/v1/documents/:id/download",
+            status: res.headersSent ? 200 : 500,
+            userId: req.user?.id,
+            tenantId,
+            details: { documentId, error: sendErr?.message },
+            stack: sendErr?.stack || null,
+          });
+          if (!res.headersSent) {
+            next(sendErr);
+          }
+        }
+      });
     } catch (err) {
       next(err);
     }

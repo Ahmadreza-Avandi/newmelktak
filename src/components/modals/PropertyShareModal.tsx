@@ -306,8 +306,7 @@ export const PropertyShareModal: React.FC<{
                         }) جهت بررسی خدمت شما:\nمتراژ: ${
                           property.area_sqm
                         } متر • محله: ${
-                          property.address?.neighborhood ||
-                          property.address?.city
+                          property.address?.neighborhood || "ثبت نشده"
                         }\nمشاهده تصاویر و جزئیات آنلاین:\n${fullUrl}\n\nسامانه مدیریت املاک`
                       );
                       if (selectedCustomer?.phone) {

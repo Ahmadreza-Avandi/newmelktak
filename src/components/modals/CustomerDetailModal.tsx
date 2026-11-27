@@ -18,8 +18,13 @@ import {
   Calendar,
   Share2,
   CircleCheck,
+  ClipboardList,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { api } from "../../services/apiClient.ts";
+import { offlineSync } from "../../services/offlineSync.ts";
+import { offlineStore } from "../../services/offlineStore.ts";
 import { useAuth } from "../../context/AuthContext.tsx";
 import { formatCompactPrice, toWords } from "../../utils/jalaali.ts";
 import { EntityDocumentsPanel } from "../common/EntityDocumentsPanel.tsx";
@@ -32,6 +37,7 @@ export const CustomerDetailModal: React.FC<{
   onClose: () => void;
   onRefresh: () => void;
   onOpenQuickAddTask?: (customer: any) => void;
+  onDeleted?: (customerId: string, customerName: string) => void;
 }> = ({
   customer: e,
   properties: t,
@@ -39,6 +45,7 @@ export const CustomerDetailModal: React.FC<{
   onClose: r,
   onRefresh: i,
   onOpenQuickAddTask: a,
+  onDeleted,
 }) => {
   const [o, s] = useState<
     "REQUIREMENTS" | "TIMELINE" | "MATCHES" | "TASKS" | "DOCUMENTS" | "EDIT"
@@ -71,6 +78,7 @@ export const CustomerDetailModal: React.FC<{
     e.customer_type === "TENANT" ? "RENT" : "SALE"
   );
   const [reqPropType, setReqPropType] = useState("APARTMENT");
+  const [reqMinBudget, setReqMinBudget] = useState<any>(e.budget_min || "");
   const [reqMaxBudget, setReqMaxBudget] = useState<any>(e.budget_max || "");
   const [reqMinArea, setReqMinArea] = useState<any>("");
   const [reqMaxArea] = useState<any>("");
@@ -80,7 +88,8 @@ export const CustomerDetailModal: React.FC<{
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [, setLoading] = useState(false);
 
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, tenant } = useAuth();
+  const scope = tenant && currentUser ? { tenantId: tenant.id, userId: currentUser.id } : null;
   const isManager =
     currentUser?.role_code === "BRANCH_MANAGER" ||
     currentUser?.role_code === "ADMIN" ||
@@ -93,10 +102,12 @@ export const CustomerDetailModal: React.FC<{
   const [Ee, De] = useState<any[]>([]);
   const [Oe, ke] = useState(false);
   const [Ae, je] = useState(false);
+  const [confirmDeleteCust, setConfirmDeleteCust] = useState(false);
+  const [deletingCust, setDeletingCust] = useState(false);
 
   const Me = (msg: string) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 3000);
+    setTimeout(() => setToastMsg(null), 3500);
   };
 
   useEffect(() => {
@@ -118,12 +129,15 @@ export const CustomerDetailModal: React.FC<{
   }, [e]);
 
   useEffect(() => {
-    if (n && isManager) {
-      api.get("/api/v1/agency/agents").then((res) => {
-        if (res.success && res.data) {
-          De(res.data.filter((item: any) => item.is_active));
-        }
-      });
+    if (n && isManager && !(typeof navigator !== "undefined" && !navigator.onLine)) {
+      api
+        .get("/api/v1/agency/agents")
+        .then((res) => {
+          if (res.success && res.data) {
+            De(res.data.filter((item: any) => item.is_active));
+          }
+        })
+        .catch(() => {});
     }
   }, [n, isManager]);
 
@@ -131,18 +145,71 @@ export const CustomerDetailModal: React.FC<{
     if (!n) return;
     setLoading(true);
     try {
+      const loadOfflineSub = async () => {
+        if (!scope) return;
+        const [reqCached, timeCached, tasksCached, queue] = await Promise.all([
+          offlineStore.getScopedValue<any[]>("kv_cache", scope, `cust_req:${e.id}`),
+          offlineStore.getScopedValue<any[]>("kv_cache", scope, `cust_time:${e.id}`),
+          offlineSync.loadSnapshot<any[]>(scope, "tasks", "ALL"),
+          offlineSync.getQueueItems(scope),
+        ]);
+        const queuedReqs = queue
+          .filter(
+            (q) =>
+              q.entityType === "REQUIREMENT" &&
+              (q.entityId === e.id || q.path.includes(`/customers/${e.id}/requirements`)),
+          )
+          .map((q) => q.optimisticData || { id: q.id, ...(q.body || {}) });
+        const queuedTimes = queue
+          .filter(
+            (q) =>
+              q.entityType === "INTERACTION" &&
+              (q.entityId === e.id || q.path.includes(`/customers/${e.id}/interactions`)),
+          )
+          .map((q) => q.optimisticData || { id: q.id, ...(q.body || {}), occurred_at: new Date(q.createdAt).toISOString() });
+
+        l([...queuedReqs, ...(reqCached || [])]);
+        d([...queuedTimes, ...(timeCached || [])]);
+        if (tasksCached) {
+          h(tasksCached.filter((task: any) => task.customer_id === e.id));
+        }
+      };
+
+      if (
+        (typeof navigator !== "undefined" && !navigator.onLine) ||
+        String(e.id || "").startsWith("offline-")
+      ) {
+        await loadOfflineSub();
+        return;
+      }
+
       const [reqRes, timeRes, matchRes, taskRes] = await Promise.all([
         api.get(`/api/v1/customers/${e.id}/requirements`),
         api.get(`/api/v1/customers/${e.id}/timeline`),
         api.get(`/api/v1/customers/${e.id}/matches`),
         api.get("/api/v1/tasks"),
       ]);
-      if (reqRes.success && reqRes.data) l(reqRes.data);
-      if (timeRes.success && timeRes.data) d(timeRes.data);
+      if (reqRes.success && reqRes.data) {
+        l(reqRes.data);
+        if (scope) {
+          await offlineStore.setScopedValue("kv_cache", scope, `cust_req:${e.id}`, reqRes.data);
+        }
+      }
+      if (timeRes.success && timeRes.data) {
+        d(timeRes.data);
+        if (scope) {
+          await offlineStore.setScopedValue("kv_cache", scope, `cust_time:${e.id}`, timeRes.data);
+        }
+      }
       if (matchRes.success && matchRes.data) p(matchRes.data);
       if (taskRes.success && taskRes.data) {
         h(taskRes.data.filter((task: any) => task.customer_id === e.id));
       }
+      if (!reqRes.success || !timeRes.success) {
+        await loadOfflineSub();
+      }
+    } catch {
+      // ignore offline
     } finally {
       setLoading(false);
     }
@@ -156,7 +223,7 @@ export const CustomerDetailModal: React.FC<{
 
   const onSaveCustomerEdit = async (ev: React.FormEvent) => {
     ev.preventDefault();
-    if (edLdg) return;
+    if (edLdg || !scope) return;
     if (!edFn.trim() || !edLn.trim()) {
       Me("نام و نام خانوادگی متقاضی الزامی است.");
       return;
@@ -176,32 +243,51 @@ export const CustomerDetailModal: React.FC<{
         preferred_area_text: edAr.trim() || undefined,
         notes: edNt.trim() || undefined,
       };
-      const res = await api.patch(`/api/v1/customers/${e.id}`, payload);
+      const res = await offlineSync.mutate(scope, {
+        method: "PATCH",
+        path: `/api/v1/customers/${e.id}`,
+        body: payload,
+        entityType: "CUSTOMER",
+        entityId: e.id,
+        expectedUpdatedAt: e.updated_at || null,
+        actionLabel: `ویرایش متقاضی «${payload.first_name} ${payload.last_name}»`,
+      });
       if (res.success) {
         Object.assign(e, payload);
         e.display_name = `${edFn.trim()} ${edLn.trim()}`;
-        Me("مشخصات متقاضی با موفقیت ویرایش و ذخیره شد.");
+        Me(
+          res.queuedOffline
+            ? "ویرایش متقاضی در صف آفلاین ذخیره شد."
+            : "مشخصات متقاضی با موفقیت ویرایش و ذخیره شد."
+        );
         s("REQUIREMENTS");
         if (i) i();
       } else {
         Me(res.error?.message || "خطا در ذخیره تغییرات مشتری.");
       }
     } catch {
-      Me("خطا در برقراری ارتباط با سرور.");
+      Me("خطا در ذخیره تغییرات مشتری.");
     } finally {
       setEdLdg(false);
     }
   };
 
   const Pe = async (vis: string) => {
-    if (vis !== ge) {
+    if (vis !== ge && scope) {
       ke(true);
       try {
-        const res = await api.patch(`/api/v1/customers/${e.id}`, {
-          visibility: vis,
+        const res = await offlineSync.mutate(scope, {
+          method: "PATCH",
+          path: `/api/v1/customers/${e.id}`,
+          body: { visibility: vis },
+          entityType: "CUSTOMER",
+          entityId: e.id,
+          expectedUpdatedAt: e.updated_at || null,
+          actionLabel: `تغییر سطح دسترسی متقاضی «${e.display_name}»`,
         });
         if (res.success) {
           _e(vis);
+          e.visibility = vis;
           Me(
             vis === "PRIVATE"
               ? "متقاضی به عنوان «پرونده اختصاصی» تنظیم شد."
@@ -212,7 +298,7 @@ export const CustomerDetailModal: React.FC<{
           Me(res.error?.message || "خطا در تغییر سطح دسترسی.");
         }
       } catch {
-        Me("خطا در ارتباط با سرور.");
+        Me("خطا در تغییر سطح دسترسی.");
       } finally {
         ke(false);
       }
@@ -245,39 +331,104 @@ export const CustomerDetailModal: React.FC<{
 
   const Re = async (ev: React.FormEvent) => {
     ev.preventDefault();
-    if (!O.trim()) return;
-    const res = await api.post(`/api/v1/customers/${e.id}/interactions`, {
+    if (!O.trim() || !scope) return;
+    const body = {
       interaction_type: E,
       title: O.trim(),
       description: A.trim() || undefined,
+    };
+    const res = await offlineSync.mutate(scope, {
+      method: "POST",
+      path: `/api/v1/customers/${e.id}/interactions`,
+      body,
+      entityType: "INTERACTION",
+      entityId: e.id,
+      actionLabel: `ثبت تعامل برای «${e.display_name}»`,
+      optimisticBuilder: (tempId) => ({
+        id: tempId,
+        ...body,
+        occurred_at: new Date().toISOString(),
+        _offlinePending: true,
+      }),
     });
     if (res.success) {
-      Me("تعامل جدید با موفقیت ثبت شد.");
+      Me(
+        res.queuedOffline
+          ? "تعامل جدید در صف همگام‌سازی آفلاین ذخیره شد."
+          : "تعامل جدید با موفقیت ثبت شد."
+      );
       k("");
       j("");
       setShowAddInteraction(false);
       Le();
       i();
+    } else {
+      Me(res.error?.message || "خطا در ثبت تعامل.");
     }
   };
 
   const ze = async (ev: React.FormEvent) => {
     ev.preventDefault();
-    const res = await api.post(`/api/v1/customers/${e.id}/requirements`, {
+    if (!scope) return;
+    const body = {
       property_type: reqPropType,
       listing_type: reqListingType,
+      min_budget: reqMinBudget ? Number(reqMinBudget) : undefined,
       max_budget: reqMaxBudget ? Number(reqMaxBudget) : undefined,
       min_area: reqMinArea ? Number(reqMinArea) : undefined,
       max_area: reqMaxArea ? Number(reqMaxArea) : undefined,
       needs_parking: reqParking,
       needs_elevator: reqElevator,
       notes: reqNotes.trim() || undefined,
+    };
+    const res = await offlineSync.mutate(scope, {
+      method: "POST",
+      path: `/api/v1/customers/${e.id}/requirements`,
+      body,
+      entityType: "REQUIREMENT",
+      entityId: e.id,
+      actionLabel: `ثبت نیازمندی برای «${e.display_name}»`,
+      optimisticBuilder: (tempId) => ({
+        id: tempId,
+        ...body,
+        _offlinePending: true,
+      }),
     });
     if (res.success) {
-      Me("نیازمندی جدید ذخیره گردید.");
+      Me(
+        res.queuedOffline
+          ? "نیازمندی در صف همگام‌سازی آفلاین ذخیره شد."
+          : "نیازمندی جدید ذخیره گردید."
+      );
       N(false);
       Le();
       i();
+    } else {
+      Me(res.error?.message || "خطا در ثبت نیازمندی.");
+    }
+  };
+
+  const handleDeleteCustomer = async () => {
+    if (!scope || deletingCust) return;
+    setDeletingCust(true);
+    try {
+      const res = await offlineSync.mutate(scope, {
+        method: "DELETE",
+        path: `/api/v1/customers/${e.id}`,
+        entityType: "CUSTOMER",
+        entityId: e.id,
+        expectedUpdatedAt: e.updated_at || null,
+        actionLabel: `حذف متقاضی «${e.display_name}»`,
+      });
+      if (res.success) {
+        onDeleted?.(e.id, e.display_name);
+        i();
+        r();
+      } else {
+        Me(res.error?.message || "خطا در حذف متقاضی.");
+      }
+    } finally {
+      setDeletingCust(false);
     }
   };
 
@@ -379,14 +530,14 @@ export const CustomerDetailModal: React.FC<{
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="flex items-center justify-between pt-1 text-xs">
-            <div className="text-slate-600 font-medium" dir="ltr">
+          <div className="flex items-center justify-between gap-2 pt-1.5 text-xs flex-wrap">
+            <div className="text-slate-600 font-medium tabular-nums" dir="ltr">
               {e.phone}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <a
                 href={`tel:${e.phone}`}
-                className="flex items-center gap-1 bg-[#145DB5] text-white px-2.5 py-1 rounded-lg font-bold hover:bg-[#0F4383] transition"
+                className="flex items-center gap-1 bg-[#145DB5] text-white px-2.5 py-1.5 rounded-lg font-bold hover:bg-[#0F4383] transition whitespace-nowrap shrink-0"
               >
                 <Phone className="w-3.5 h-3.5" />
                 <span>تماس مستقیم</span>
@@ -395,24 +546,25 @@ export const CustomerDetailModal: React.FC<{
                 href={`https://api.whatsapp.com/send?phone=${Ue(e.phone)}`}
                 target="_blank"
                 rel="noreferrer"
-                className="flex items-center gap-1 bg-emerald-700 text-white px-2.5 py-1 rounded-lg font-bold hover:bg-emerald-800 transition"
+                className="flex items-center gap-1 bg-emerald-700 text-white px-2.5 py-1.5 rounded-lg font-bold hover:bg-emerald-800 transition whitespace-nowrap shrink-0"
               >
                 <MessageSquare className="w-3.5 h-3.5" />
                 <span>واتس‌اپ</span>
               </a>
+              <button
+                type="button"
+                onClick={() => s(o === "EDIT" ? "REQUIREMENTS" : "EDIT")}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-bold border transition text-xs whitespace-nowrap shrink-0 cursor-pointer ${
+                  o === "EDIT"
+                    ? "bg-amber-600 text-white border-amber-600"
+                    : "bg-white border-slate-300 text-slate-700 hover:border-[#145DB5] hover:text-[#145DB5]"
+                }`}
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>{o === "EDIT" ? "بازگشت" : "ویرایش"}</span>
+              </button>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => s(o === "EDIT" ? "REQUIREMENTS" : "EDIT")}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg font-bold border transition text-xs shrink-0 ${
-              o === "EDIT"
-                ? "bg-amber-600 text-white border-amber-600"
-                : "bg-white border-slate-300 text-slate-700 hover:border-[#145DB5] hover:text-[#145DB5]"
-            }`}
-          >
-            <span>{o === "EDIT" ? "بازگشت" : "ویرایش متقاضی"}</span>
-          </button>
         </div>
 
         {toastMsg && (
@@ -421,72 +573,80 @@ export const CustomerDetailModal: React.FC<{
           </div>
         )}
 
-        <div className="grid grid-cols-6 border-b border-slate-100 bg-slate-50 text-[11px] font-bold">
-          <button
-            onClick={() => s("REQUIREMENTS")}
-            className={`py-2 text-center transition ${
-              o === "REQUIREMENTS"
-                ? "bg-white text-[#145DB5] border-b-2 border-[#145DB5]"
-                : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            نیازمندی‌ها
-          </button>
-          <button
-            onClick={() => s("TIMELINE")}
-            className={`py-2 text-center transition flex items-center justify-center gap-1 ${
-              o === "TIMELINE"
-                ? "bg-white text-[#145DB5] border-b-2 border-[#145DB5]"
-                : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            <span>تایم‌لاین</span>
-            {u.length > 0 && (
-              <span className="bg-blue-100 text-[#145DB5] text-[10px] px-1.5 rounded-full">
-                {u.length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => s("MATCHES")}
-            className={`py-2 text-center transition flex items-center justify-center gap-1 ${
-              o === "MATCHES"
-                ? "bg-white text-[#145DB5] border-b-2 border-[#145DB5]"
-                : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            <span>فایل‌ها</span>
-            {f.length > 0 && (
-              <span className="bg-emerald-100 text-emerald-800 text-[10px] px-1.5 rounded-full font-black">
-                {f.length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => s("TASKS")}
-            className={`py-2 text-center transition flex items-center justify-center gap-1 ${
-              o === "TASKS"
-                ? "bg-white text-[#145DB5] border-b-2 border-[#145DB5]"
-                : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            <span>پیگیری</span>
-            {m.length > 0 && (
-              <span className="bg-slate-200 text-slate-700 text-[10px] px-1.5 rounded-full">
-                {m.length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => s("DOCUMENTS")}
-            className={`py-2 text-center transition flex items-center justify-center gap-1 ${
-              o === "DOCUMENTS"
-                ? "bg-white text-[#145DB5] border-b-2 border-[#145DB5]"
-                : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            <span>اسناد</span>
-          </button>
+        <div
+          role="tablist"
+          aria-label="بخش‌های پرونده متقاضی"
+          className="p-2.5 border-b border-slate-200 bg-slate-50/90"
+        >
+          <div className="flex flex-wrap sm:grid sm:grid-cols-5 gap-1.5">
+            {(
+              [
+                {
+                  id: "REQUIREMENTS",
+                  label: "نیازمندی‌ها",
+                  icon: ClipboardList,
+                  count: c.length,
+                },
+                {
+                  id: "TIMELINE",
+                  label: "تایم‌لاین",
+                  icon: Clock,
+                  count: u.length,
+                },
+                {
+                  id: "MATCHES",
+                  label: "فایل‌ها",
+                  icon: Building2,
+                  count: f.length,
+                },
+                {
+                  id: "TASKS",
+                  label: "پیگیری",
+                  icon: Calendar,
+                  count: m.length,
+                },
+                {
+                  id: "DOCUMENTS",
+                  label: "اسناد",
+                  icon: FileText,
+                  count: 0,
+                },
+              ] as const
+            ).map((tab) => {
+              const Icon = tab.icon;
+              const isActive = o === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => s(tab.id)}
+                  className={`flex-1 min-w-[calc(33%-4px)] sm:min-w-0 py-2 px-2.5 rounded-xl border text-[11px] font-bold transition flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                    isActive
+                      ? "bg-[#145DB5] text-white border-[#145DB5] shadow-xs"
+                      : "bg-white text-slate-700 border-slate-200 hover:border-[#145DB5]/40 hover:bg-blue-50/40 hover:text-[#145DB5]"
+                  }`}
+                >
+                  <Icon
+                    className={`w-3.5 h-3.5 shrink-0 ${
+                      isActive ? "text-white" : "text-[#145DB5]"
+                    }`}
+                  />
+                  <span>{tab.label}</span>
+                  {tab.count > 0 && (
+                    <span
+                      className={`text-[10px] font-black tabular-nums ${
+                        isActive ? "text-blue-100" : "text-slate-500"
+                      }`}
+                    >
+                      ({tab.count})
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div className="p-4 space-y-4 overflow-y-auto flex-1 text-xs">
@@ -660,9 +820,15 @@ export const CustomerDetailModal: React.FC<{
             <div className="space-y-3">
               <div className="bg-[#F7F9FC] border border-slate-200 rounded-xl p-3 space-y-2">
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-500 font-medium">سقف بودجه اعلامی:</span>
+                  <span className="text-slate-500 font-medium">بازه بودجه اعلامی:</span>
                   <span className="font-black text-[#145DB5]">
-                    {e.budget_max ? formatCompactPrice(e.budget_max) : "تعیین‌نشده"}
+                    {e.budget_min && e.budget_max
+                      ? `از ${formatCompactPrice(e.budget_min)} تا ${formatCompactPrice(e.budget_max)}`
+                      : e.budget_max
+                      ? `تا ${formatCompactPrice(e.budget_max)}`
+                      : e.budget_min
+                      ? `از ${formatCompactPrice(e.budget_min)}`
+                      : "تعیین‌نشده"}
                   </span>
                 </div>
                 {e.preferred_area_text && (
@@ -883,7 +1049,13 @@ export const CustomerDetailModal: React.FC<{
                             : req.property_type}
                         </span>
                         <span className="text-[11px] font-black text-[#145DB5]">
-                          تا {formatCompactPrice(req.max_budget)}
+                          {req.min_budget && req.max_budget
+                            ? `از ${formatCompactPrice(req.min_budget)} تا ${formatCompactPrice(req.max_budget)}`
+                            : req.max_budget
+                            ? `تا ${formatCompactPrice(req.max_budget)}`
+                            : req.min_budget
+                            ? `از ${formatCompactPrice(req.min_budget)}`
+                            : "بدون سقف بودجه"}
                         </span>
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-[11px] bg-slate-50 p-2 rounded-lg">
@@ -960,7 +1132,26 @@ export const CustomerDetailModal: React.FC<{
                         </select>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] text-slate-600 block mb-1">
+                          حداقل بودجه (تومان):
+                        </label>
+                        <input
+                          type="number"
+                          value={reqMinBudget}
+                          onChange={(ev) =>
+                            setReqMinBudget(ev.target.value ? Number(ev.target.value) : "")
+                          }
+                          placeholder="مثلا: 7000000000"
+                          className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs font-mono"
+                        />
+                        {reqMinBudget && toWords(reqMinBudget) && (
+                          <p className="mt-1 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
+                            {toWords(reqMinBudget)}
+                          </p>
+                        )}
+                      </div>
                       <div>
                         <label className="text-[11px] text-slate-600 block mb-1">
                           حداکثر بودجه (تومان):
@@ -971,8 +1162,8 @@ export const CustomerDetailModal: React.FC<{
                           onChange={(ev) =>
                             setReqMaxBudget(ev.target.value ? Number(ev.target.value) : "")
                           }
-                          placeholder="مثلا: 4500000000"
-                          className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs"
+                          placeholder="مثلا: 9000000000"
+                          className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs font-mono"
                         />
                         {reqMaxBudget && toWords(reqMaxBudget) && (
                           <p className="mt-1 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
@@ -980,20 +1171,20 @@ export const CustomerDetailModal: React.FC<{
                           </p>
                         )}
                       </div>
-                      <div>
-                        <label className="text-[11px] text-slate-600 block mb-1">
-                          حداقل متراژ (متر):
-                        </label>
-                        <input
-                          type="number"
-                          value={reqMinArea}
-                          onChange={(ev) =>
-                            setReqMinArea(ev.target.value ? Number(ev.target.value) : "")
-                          }
-                          placeholder="مثلا: 100"
-                          className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs"
-                        />
-                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-600 block mb-1">
+                        حداقل متراژ (متر):
+                      </label>
+                      <input
+                        type="number"
+                        value={reqMinArea}
+                        onChange={(ev) =>
+                          setReqMinArea(ev.target.value ? Number(ev.target.value) : "")
+                        }
+                        placeholder="مثلا: 100"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs"
+                      />
                     </div>
                     <div className="flex items-center gap-4">
                       <label className="flex items-center gap-1.5 cursor-pointer text-[11px]">
@@ -1226,7 +1417,7 @@ export const CustomerDetailModal: React.FC<{
                         </span>
                         <span className="text-slate-500">
                           {prop.area_sqm} متر •{" "}
-                          {prop.address.neighborhood || prop.address.city}
+                          {prop.address?.neighborhood || "بدون محله"}
                         </span>
                       </div>
                       <div className="flex flex-wrap gap-1">
@@ -1339,22 +1530,61 @@ export const CustomerDetailModal: React.FC<{
           )}
         </div>
 
-        <div className="p-3.5 border-t border-slate-100 bg-white sticky bottom-0 z-10 flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
+        <div className="p-3.5 border-t border-slate-100 bg-white sticky bottom-0 z-10 space-y-2">
+          {confirmDeleteCust && (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 flex items-center justify-between gap-2 text-[11px]">
+              <span className="font-bold text-rose-800">
+                متقاضی حذف یا بایگانی شود؟
+              </span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  disabled={deletingCust}
+                  onClick={handleDeleteCustomer}
+                  className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 disabled:opacity-50"
+                >
+                  {deletingCust ? "..." : "بله، حذف شود"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteCust(false)}
+                  className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold"
+                >
+                  انصراف
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => a?.(e)}
+                className="flex items-center gap-1 bg-slate-100 text-slate-800 px-3 py-2 rounded-xl font-bold text-xs hover:bg-slate-200 transition"
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                <span>تنظیم پیگیری</span>
+              </button>
+              {(isManager ||
+                e.assigned_agent_id === currentUser?.id ||
+                e.created_by_user_id === currentUser?.id) && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteCust((prev) => !prev)}
+                  className="flex items-center gap-1 bg-rose-50 text-rose-700 border border-rose-200 px-2.5 py-2 rounded-xl font-bold text-xs hover:bg-rose-100 transition cursor-pointer"
+                  title="حذف متقاضی"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>حذف</span>
+                </button>
+              )}
+            </div>
             <button
-              onClick={() => a?.(e)}
-              className="flex items-center gap-1 bg-slate-100 text-slate-800 px-3 py-2 rounded-xl font-bold text-xs hover:bg-slate-200 transition"
+              onClick={r}
+              className="px-5 py-2 bg-[#145DB5] text-white rounded-xl font-bold text-xs hover:bg-[#0F4383] transition"
             >
-              <Calendar className="w-3.5 h-3.5" />
-              <span>تنظیم پیگیری</span>
+              بستن پرونده
             </button>
           </div>
-          <button
-            onClick={r}
-            className="px-5 py-2 bg-[#145DB5] text-white rounded-xl font-bold text-xs hover:bg-[#0F4383] transition"
-          >
-            بستن پرونده
-          </button>
         </div>
       </div>
 

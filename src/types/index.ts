@@ -266,6 +266,7 @@ export interface PaginatedResponse<T> {
 
 export interface ApiResponse<T = any> {
   success: boolean;
+  status?: number;
   data?: T;
   meta?: any;
   message?: string;

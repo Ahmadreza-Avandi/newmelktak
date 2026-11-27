@@ -1,23 +1,136 @@
 // @ts-nocheck
 import { getPlatformCredentials } from "../config/runtime.js";
-var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,"name",{value,configurable:true});var __defProp2=Object.defineProperty;var __name2=__name((target,value)=>__defProp2(target,"name",{value,configurable:true}),"__name");var __defProp22=Object.defineProperty;var __name22=__name2((target,value)=>__defProp22(target,"name",{value,configurable:true}),"__name");import fs from"fs";import path from"path";import crypto from"crypto";import bcrypt from"bcryptjs";import{PGlite}from"@electric-sql/pglite";import{PostgresPool}from"./postgres-pool.js";import{normalizeIranianPhone,normalizeDigits}from"../../shared/normalization.js";class PostgresDatabase{public pg!: any;static{__name(this,"PostgresDatabase")}static{__name2(this,"PostgresDatabase")}constructor(){this.isInitialized=false;this.initializationPromise=null}static{__name22(this,"PostgresDatabase")}async init(){if(this.isInitialized)return;if(this.initializationPromise)return this.initializationPromise;this.initializationPromise=this.initializeDatabase();try{await this.initializationPromise}catch(err){this.initializationPromise=null;throw err}}async initializeDatabase() {
+import { logger, SystemLogRecord } from "../logging/logger.js";
+import { redactValue } from "../logging/redactor.js";
+var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,"name",{value,configurable:true});var __defProp2=Object.defineProperty;var __name2=__name((target,value)=>__defProp2(target,"name",{value,configurable:true}),"__name");var __defProp22=Object.defineProperty;var __name22=__name2((target,value)=>__defProp22(target,"name",{value,configurable:true}),"__name");import fs from"fs";import path from"path";import crypto from"crypto";import bcrypt from"bcryptjs";import{PGlite}from"@electric-sql/pglite";import{PostgresPool}from"./postgres-pool.js";import{normalizeIranianPhone,normalizeDigits}from"../../shared/normalization.js";
+
+const UNIFIED_PLAN_FEATURES = [
+  "مدیریت نامحدود فایل‌های ملکی، مالکان و متقاضیان",
+  "سیستم چندشعبه‌ای و تفکیک دسترسی مدیران شعب",
+  "بایگانی امن اسناد و قراردادها با احراز هویت",
+  "موتور تطبیق هوشمند متقاضیان با فایل‌های ملکی (Smart Matching)",
+  "گزارش‌گیری عملکرد مشاوران، معاملات و پیگیری‌ها",
+  "اشتراک‌گذاری امن فایل ملکی با لینک عمومی",
+];
+
+const PLAN_DEFINITIONS: Record<string, { code: string; title: string; max_branches: number; max_agents: number; capacity_label: string; description: string }> = {
+  FREE_TRIAL: {
+    code: "FREE_TRIAL",
+    title: "آزمایشی رایگان",
+    max_branches: 1,
+    max_agents: 3,
+    capacity_label: "۱ شعبه • ۳ مشاور",
+    description: "دوره آزمایشی ۱۴ روزه با تمامی امکانات سامانه",
+  },
+  STARTER: {
+    code: "STARTER",
+    title: "پلن پایه",
+    max_branches: 1,
+    max_agents: 3,
+    capacity_label: "۱ شعبه • ۳ مشاور",
+    description: "۱ شعبه فعال و حداکثر ۳ مشاور",
+  },
+  PROFESSIONAL: {
+    code: "PROFESSIONAL",
+    title: "پلن حرفه‌ای",
+    max_branches: 3,
+    max_agents: 5,
+    capacity_label: "۳ شعبه • ۵ مشاور",
+    description: "۳ شعبه فعال و حداکثر ۵ مشاور",
+  },
+  ENTERPRISE_PRO: {
+    code: "ENTERPRISE_PRO",
+    title: "پلن پیشرفته",
+    max_branches: 10,
+    max_agents: 20,
+    capacity_label: "۵ شعبه به بالا • ۸ مشاور به بالا",
+    description: "۵ شعبه به بالا و ۸ مشاور به بالا",
+  },
+};
+
+function resolveEffectivePlanLimits(planCode?: string | null, dbMaxBranches?: any, dbMaxAgents?: any) {
+  const code = (planCode || "ENTERPRISE_PRO").toUpperCase();
+  const def = PLAN_DEFINITIONS[code] || PLAN_DEFINITIONS.ENTERPRISE_PRO;
+  const rawBranches = Number(dbMaxBranches || 0);
+  const rawAgents = Number(dbMaxAgents || 0);
+  if (code === "STARTER") {
+    const legacyUntouched = (rawBranches === 5 && rawAgents === 20) || (rawBranches === 1 && rawAgents === 5);
+    return {
+      maxBranches: legacyUntouched || rawBranches <= 0 ? def.max_branches : Math.min(rawBranches, def.max_branches),
+      maxAgents: legacyUntouched || rawAgents <= 0 ? def.max_agents : Math.min(rawAgents, def.max_agents),
+    };
+  }
+  if (code === "PROFESSIONAL") {
+    const legacyUntouched = (rawBranches === 5 && rawAgents === 20) || (rawBranches === 3 && rawAgents === 15);
+    return {
+      maxBranches: legacyUntouched || rawBranches <= 0 ? def.max_branches : rawBranches,
+      maxAgents: legacyUntouched || rawAgents <= 0 ? def.max_agents : rawAgents,
+    };
+  }
+  if (code === "ENTERPRISE_PRO") {
+    return {
+      maxBranches: Math.max(5, rawBranches || def.max_branches),
+      maxAgents: Math.max(8, rawAgents || def.max_agents),
+    };
+  }
+  return {
+    maxBranches: rawBranches > 0 ? rawBranches : def.max_branches,
+    maxAgents: rawAgents > 0 ? rawAgents : def.max_agents,
+  };
+}
+
+class PostgresDatabase{public pg!: any;static{__name(this,"PostgresDatabase")}static{__name2(this,"PostgresDatabase")}constructor(){this.isInitialized=false;this.initializationPromise=null}static{__name22(this,"PostgresDatabase")}async init(){if(this.isInitialized)return;if(this.initializationPromise)return this.initializationPromise;this.initializationPromise=this.initializeDatabase();try{await this.initializationPromise}catch(err){this.initializationPromise=null;throw err}}async initializeDatabase() {
     const dataDir = path.resolve(process.env.DATA_DIR || path.join(process.cwd(), "data"), "amlak_postgres");
     getPlatformCredentials();
     if (process.env.NODE_ENV === "production" && process.env.SEED_DEMO_DATA === "true") throw new Error("Demo seeding is forbidden in production.");
     try {
       if (process.env.DATABASE_URL) {
-        this.pg = new PostgresPool(process.env.DATABASE_URL);
+        const pool = new PostgresPool(process.env.DATABASE_URL);
+        try {
+          await pool.waitReady;
+          this.pg = pool;
+        } catch (pgErr: any) {
+          await pool.close().catch(() => {});
+          if (process.env.NODE_ENV === "production") {
+            logger.error("PostgreSQL connection failed in production", {
+              module: "postgres",
+              operation: "db_connect_failed",
+              details: { pgCode: pgErr?.code || null },
+              stack: pgErr?.stack || null,
+              persistToDb: false,
+            });
+            throw pgErr;
+          }
+          logger.warn("PostgreSQL at DATABASE_URL unavailable in development — falling back to local PGlite", {
+            module: "postgres",
+            operation: "db_dev_fallback",
+            details: { pgCode: pgErr?.code || null, reason: pgErr?.message || String(pgErr) },
+            persistToDb: false,
+          });
+          fs.mkdirSync(dataDir, { recursive: true });
+          this.pg = new PGlite(dataDir);
+          await this.pg.waitReady;
+        }
       } else {
-        // Keep isolated in-memory PGlite available to the existing test harness.
+        // Keep isolated in-memory/local PGlite available in development and tests.
         fs.mkdirSync(dataDir, { recursive: true });
         this.pg = new PGlite(dataDir);
+        await this.pg.waitReady;
       }
-      await this.pg.waitReady;
       await this.applyMigrations();
       await this.removeDemoLogins();
       await this.bootstrapPlatformAdminIfConfigured();
       this.isInitialized = true;
-    } catch (error) {
+      logger.startRetentionScheduler();
+      void logger.runRetentionCleanup();
+    } catch (error: any) {
+      logger.error("Critical database initialization failure", {
+        module: "postgres",
+        operation: "db_init_failed",
+        details: { pgCode: error?.code || null },
+        stack: error?.stack || null,
+        persistToDb: false,
+      });
       if (this.pg) await this.pg.close().catch(() => {});
       // Never remove the database, PID files, or silently switch to memory.
       throw error;
@@ -580,6 +693,29 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
       CREATE INDEX IF NOT EXISTS idx_platform_support_sessions ON platform_support_sessions(tenant_id, status);
       CREATE INDEX IF NOT EXISTS idx_support_audit_logs_session ON support_audit_logs(support_session_id);
 
+      -- Operational System Logs (strictly separate from security audit_logs and support_audit_logs)
+      CREATE TABLE IF NOT EXISTS system_logs (
+        id UUID PRIMARY KEY,
+        level VARCHAR(16) NOT NULL,
+        module VARCHAR(80) NOT NULL,
+        operation VARCHAR(100) NOT NULL,
+        message TEXT NOT NULL,
+        request_id VARCHAR(80),
+        method VARCHAR(16),
+        route VARCHAR(255),
+        status INTEGER,
+        duration_ms INTEGER,
+        user_id VARCHAR(100),
+        tenant_id VARCHAR(100),
+        details JSONB,
+        stack TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_system_logs_level_created ON system_logs(level, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_system_logs_module_created ON system_logs(module, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_system_logs_request_id ON system_logs(request_id);
+
       -- Safely disable the seeded demo superadmin user identity and revoke its sessions
       UPDATE users SET is_active = false WHERE id = 'c1a11111-9999-9999-9999-999999999999' AND username = 'superadmin';
       DELETE FROM sessions WHERE user_id = 'c1a11111-9999-9999-9999-999999999999';
@@ -623,7 +759,83 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
     await this.pg.query(`
       UPDATE users SET is_active = false WHERE id = 'c1a11111-9999-9999-9999-999999999999' OR (username = 'superadmin' AND tenant_id = 'e2b17b3c-53f0-466d-9279-d102e5b7b001');
       DELETE FROM sessions WHERE user_id = 'c1a11111-9999-9999-9999-999999999999';
+      UPDATE tenants SET max_branches = 1, max_agents = 3 WHERE plan_code = 'STARTER' AND ((max_branches = 5 AND max_agents = 20) OR max_agents = 5);
+      UPDATE tenants SET max_branches = 3, max_agents = 5 WHERE plan_code = 'PROFESSIONAL' AND max_agents = 15;
+      UPDATE tenants SET max_branches = GREATEST(max_branches, 5), max_agents = GREATEST(max_agents, 8) WHERE plan_code = 'ENTERPRISE_PRO' OR plan_code IS NULL;
     `).catch(()=>{});
+    await this.pg.exec(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key VARCHAR(120) PRIMARY KEY,
+        value JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id UUID PRIMARY KEY,
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        endpoint TEXT NOT NULL,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        user_agent TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT push_subscriptions_unique UNIQUE (tenant_id, user_id, endpoint)
+      );
+      CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(tenant_id, user_id);
+
+      CREATE TABLE IF NOT EXISTS notifications (
+        id UUID PRIMARY KEY,
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        branch_id UUID,
+        category VARCHAR(50) NOT NULL,
+        dedup_key VARCHAR(220) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        body TEXT NOT NULL,
+        entity_type VARCHAR(50),
+        entity_id VARCHAR(100),
+        target_url TEXT NOT NULL,
+        metadata JSONB,
+        is_read BOOLEAN NOT NULL DEFAULT false,
+        read_at TIMESTAMPTZ,
+        delivered_push BOOLEAN NOT NULL DEFAULT false,
+        scheduled_for TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT notifications_dedup_unique UNIQUE (tenant_id, user_id, dedup_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(tenant_id, user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(tenant_id, user_id, is_read);
+
+      CREATE TABLE IF NOT EXISTS notification_preferences (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        two_hour_reminder BOOLEAN NOT NULL DEFAULT true,
+        overdue_reminder BOOLEAN NOT NULL DEFAULT true,
+        visit_reminder BOOLEAN NOT NULL DEFAULT true,
+        near_due_reminder BOOLEAN NOT NULL DEFAULT true,
+        sync_alerts BOOLEAN NOT NULL DEFAULT true,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS offline_sync_receipts (
+        id UUID PRIMARY KEY,
+        tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        idempotency_key VARCHAR(128) NOT NULL,
+        method VARCHAR(16) NOT NULL,
+        path VARCHAR(255) NOT NULL,
+        status_code INTEGER NOT NULL,
+        response_json JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT offline_sync_receipts_unique UNIQUE (tenant_id, user_id, idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_offline_sync_receipts_created ON offline_sync_receipts(created_at);
+    `);
+    logger.setDbHandlers(
+      (entry) => this.insertSystemLog(entry),
+      (retentionDays, maxRows) => this.pruneSystemLogs(retentionDays, maxRows),
+    );
 }async getNextPropertyCode(tenantId){await this.init();const res=await this.pg.query(`INSERT INTO tenant_counters (tenant_id, counter_type, last_val)
        VALUES ($1, 'property_code', 1035)
        ON CONFLICT (tenant_id, counter_type)
@@ -671,12 +883,41 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
       LEFT JOIN branches b ON b.id = u.branch_id
       WHERE u.tenant_id = $1 AND u.id = $2
       LIMIT 1
-    `,[tenantId,id]);return res.rows[0]||null}async createAgent(tenantId,actorUserId,data){await this.init();const id=crypto.randomUUID();const username=data.username.trim().toLowerCase();const normalizedPhone=normalizeIranianPhone(data.phone);const displayName=`${data.first_name.trim()} ${data.last_name.trim()}`.trim();const roleCode=data.role_code||"AGENT";const passwordHash=bcrypt.hashSync(data.password,10);const email=data.email?data.email.trim().toLowerCase():null;let branchId=data.branch_id||null;if(!branchId){const actor=await this.getUserById(actorUserId);branchId=actor?.branch_id||null;if(!branchId){const mb=await this.pg.query(`SELECT id FROM branches WHERE tenant_id = $1 AND is_main = true LIMIT 1`,[tenantId]);branchId=mb.rows[0]?.id||null}}const existing=await this.pg.query(`SELECT id FROM users WHERE tenant_id = $1 AND (LOWER(username) = $2 OR phone = $3)`,[tenantId,username,normalizedPhone]);if(existing.rows.length>0){const conflictErr=new Error("\u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC \u06CC\u0627 \u0634\u0645\u0627\u0631\u0647 \u0647\u0645\u0631\u0627\u0647 \u0642\u0628\u0644\u0627\u064B \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u062B\u0628\u062A \u0634\u062F\u0647 \u0627\u0633\u062A.");conflictErr.status=409;conflictErr.code="DUPLICATE_USER";throw conflictErr}await this.pg.query(`
+    `,[tenantId,id]);return res.rows[0]||null}
+  async assertBranchQuota(tenantId) {
+    const tRes = await this.pg.query(`SELECT plan_code, max_branches, max_agents FROM tenants WHERE id = $1 LIMIT 1`, [tenantId]);
+    if (tRes.rows.length === 0) return;
+    const t = tRes.rows[0];
+    const { maxBranches } = resolveEffectivePlanLimits(t.plan_code, t.max_branches, t.max_agents);
+    const cntRes = await this.pg.query(`SELECT COUNT(*)::int AS cnt FROM branches WHERE tenant_id = $1 AND status = 'ACTIVE'`, [tenantId]);
+    const activeCount = Number(cntRes.rows[0]?.cnt || 0);
+    if (activeCount >= maxBranches) {
+      const err = new Error(`سقف تعداد شعب مجاز در پلن اشتراک فعلی (${maxBranches} شعبه) تکمیل شده است. برای ثبت شعبه جدید، لطفاً پلن اشتراک خود را ارتقا دهید.`);
+      err.status = 403;
+      err.code = "PLAN_BRANCH_LIMIT_EXCEEDED";
+      throw err;
+    }
+  }
+  async assertAgentQuota(tenantId) {
+    const tRes = await this.pg.query(`SELECT plan_code, max_branches, max_agents FROM tenants WHERE id = $1 LIMIT 1`, [tenantId]);
+    if (tRes.rows.length === 0) return;
+    const t = tRes.rows[0];
+    const { maxAgents } = resolveEffectivePlanLimits(t.plan_code, t.max_branches, t.max_agents);
+    const cntRes = await this.pg.query(`SELECT COUNT(*)::int AS cnt FROM users WHERE tenant_id = $1 AND is_active = true`, [tenantId]);
+    const activeCount = Number(cntRes.rows[0]?.cnt || 0);
+    if (activeCount >= maxAgents) {
+      const err = new Error(`سقف تعداد مشاوران مجاز در پلن اشتراک فعلی (${maxAgents} مشاور) تکمیل شده است. برای افزودن یا فعال‌سازی مشاور جدید، لطفاً پلن اشتراک خود را ارتقا دهید.`);
+      err.status = 403;
+      err.code = "PLAN_AGENT_LIMIT_EXCEEDED";
+      throw err;
+    }
+  }
+  async createAgent(tenantId,actorUserId,data){await this.init();const id=crypto.randomUUID();const username=data.username.trim().toLowerCase();const normalizedPhone=normalizeIranianPhone(data.phone);const displayName=`${data.first_name.trim()} ${data.last_name.trim()}`.trim();const roleCode=data.role_code||"AGENT";const passwordHash=bcrypt.hashSync(data.password,10);const email=data.email?data.email.trim().toLowerCase():null;let branchId=data.branch_id||null;if(!branchId){const actor=await this.getUserById(actorUserId);branchId=actor?.branch_id||null;if(!branchId){const mb=await this.pg.query(`SELECT id FROM branches WHERE tenant_id = $1 AND is_main = true LIMIT 1`,[tenantId]);branchId=mb.rows[0]?.id||null}}const existing=await this.pg.query(`SELECT id FROM users WHERE tenant_id = $1 AND (LOWER(username) = $2 OR phone = $3)`,[tenantId,username,normalizedPhone]);if(existing.rows.length>0){const conflictErr=new Error("\u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC \u06CC\u0627 \u0634\u0645\u0627\u0631\u0647 \u0647\u0645\u0631\u0627\u0647 \u0642\u0628\u0644\u0627\u064B \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u062B\u0628\u062A \u0634\u062F\u0647 \u0627\u0633\u062A.");conflictErr.status=409;conflictErr.code="DUPLICATE_USER";throw conflictErr}await this.assertAgentQuota(tenantId);await this.pg.query(`
       INSERT INTO users (
         id, tenant_id, branch_id, username, password_hash, first_name, last_name, display_name,
         phone, email, is_active, role_code, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `,[id,tenantId,branchId,username,passwordHash,data.first_name.trim(),data.last_name.trim(),displayName,normalizedPhone,email,roleCode]);await this.addAuditLog(tenantId,actorUserId,"AGENT_CREATED","USER",id,{branch_id:branchId,role_code:roleCode});const user=await this.getUserById(id);const{password_hash,...safeUser}=user;return safeUser}async updateAgent(tenantId,actorUserId,agentId,data){await this.init();const agent=await this.getUserById(agentId);if(!agent||agent.tenant_id!==tenantId){const err=new Error("\u0645\u0634\u0627\u0648\u0631 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="AGENT_NOT_FOUND";throw err}const updates=[];const params=[];let paramIdx=1;if(data.first_name!==void 0){updates.push(`first_name = $${paramIdx++}`);params.push(data.first_name.trim())}if(data.last_name!==void 0){updates.push(`last_name = $${paramIdx++}`);params.push(data.last_name.trim())}const firstName=data.first_name!==void 0?data.first_name.trim():agent.first_name;const lastName=data.last_name!==void 0?data.last_name.trim():agent.last_name;const displayName=`${firstName} ${lastName}`.trim();updates.push(`display_name = $${paramIdx++}`);params.push(displayName);if(data.username!==void 0){const username=data.username.trim().toLowerCase();const existing=await this.pg.query(`SELECT id FROM users WHERE tenant_id = $1 AND LOWER(username) = $2 AND id != $3`,[tenantId,username,agentId]);if(existing.rows.length>0){const conflictErr=new Error("\u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC \u0642\u0628\u0644\u0627\u064B \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u062B\u0628\u062A \u0634\u062F\u0647 \u0627\u0633\u062A.");conflictErr.status=409;conflictErr.code="DUPLICATE_USER";throw conflictErr}updates.push(`username = $${paramIdx++}`);params.push(username)}if(data.phone!==void 0){const normalizedPhone=normalizeIranianPhone(data.phone);const existing=await this.pg.query(`SELECT id FROM users WHERE tenant_id = $1 AND phone = $2 AND id != $3`,[tenantId,normalizedPhone,agentId]);if(existing.rows.length>0){const conflictErr=new Error("\u0634\u0645\u0627\u0631\u0647 \u0647\u0645\u0631\u0627\u0647 \u0642\u0628\u0644\u0627\u064B \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u062B\u0628\u062A \u0634\u062F\u0647 \u0627\u0633\u062A.");conflictErr.status=409;conflictErr.code="DUPLICATE_USER";throw conflictErr}updates.push(`phone = $${paramIdx++}`);params.push(normalizedPhone)}if(data.email!==void 0){const email=data.email?data.email.trim().toLowerCase():null;updates.push(`email = $${paramIdx++}`);params.push(email)}if(data.role_code!==void 0){updates.push(`role_code = $${paramIdx++}`);params.push(data.role_code)}if(data.branch_id!==void 0){updates.push(`branch_id = $${paramIdx++}`);params.push(data.branch_id||null)}if(updates.length>1){updates.push(`updated_at = CURRENT_TIMESTAMP`);params.push(agentId,tenantId);const query=`UPDATE users SET ${updates.join(", ")} WHERE id = $${paramIdx++} AND tenant_id = $${paramIdx++}`;await this.pg.query(query,params);await this.addAuditLog(tenantId,actorUserId,"AGENT_UPDATED","USER",agentId,{updates:data})}const updated=await this.getUserById(agentId);const{password_hash,...safeUser}=updated;return safeUser}async setAgentStatus(tenantId,actorUserId,agentId,isActive){await this.init();const agent=await this.getUserById(agentId);if(!agent||agent.tenant_id!==tenantId){const err=new Error("\u0645\u0634\u0627\u0648\u0631 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="AGENT_NOT_FOUND";throw err}if(agentId===actorUserId&&!isActive){const err=new Error("\u0627\u0645\u06A9\u0627\u0646 \u063A\u06CC\u0631\u0641\u0639\u0627\u0644\u200C\u0633\u0627\u0632\u06CC \u062D\u0633\u0627\u0628 \u06A9\u0627\u0631\u0628\u0631\u06CC \u062E\u0648\u062F\u062A\u0627\u0646 \u0648\u062C\u0648\u062F \u0646\u062F\u0627\u0631\u062F.");err.status=400;err.code="CANNOT_DEACTIVATE_SELF";throw err}await this.pg.query(`UPDATE users SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND tenant_id = $3`,[isActive,agentId,tenantId]);if(!isActive){await this.pg.query(`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND tenant_id = $2 AND revoked_at IS NULL`,[agentId,tenantId]);await this.addAuditLog(tenantId,actorUserId,"AGENT_DEACTIVATED","USER",agentId)}else{await this.addAuditLog(tenantId,actorUserId,"AGENT_ACTIVATED","USER",agentId)}const updated=await this.getUserById(agentId);const{password_hash,...safeUser}=updated;return safeUser}async createSession(userId,tenantId,ip,ua){await this.init();const rawToken=crypto.randomBytes(32).toString("hex");const tokenHash=crypto.createHash("sha256").update(rawToken).digest("hex");const expiresAt=new Date(Date.now()+14*864e5).toISOString();const id=crypto.randomUUID();await this.pg.query(`INSERT INTO sessions (id, user_id, tenant_id, token_hash, expires_at, ip_address, user_agent)
+    `,[id,tenantId,branchId,username,passwordHash,data.first_name.trim(),data.last_name.trim(),displayName,normalizedPhone,email,roleCode]);await this.addAuditLog(tenantId,actorUserId,"AGENT_CREATED","USER",id,{branch_id:branchId,role_code:roleCode});const user=await this.getUserById(id);const{password_hash,...safeUser}=user;return safeUser}async updateAgent(tenantId,actorUserId,agentId,data){await this.init();const agent=await this.getUserById(agentId);if(!agent||agent.tenant_id!==tenantId){const err=new Error("\u0645\u0634\u0627\u0648\u0631 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="AGENT_NOT_FOUND";throw err}const updates=[];const params=[];let paramIdx=1;if(data.first_name!==void 0){updates.push(`first_name = $${paramIdx++}`);params.push(data.first_name.trim())}if(data.last_name!==void 0){updates.push(`last_name = $${paramIdx++}`);params.push(data.last_name.trim())}const firstName=data.first_name!==void 0?data.first_name.trim():agent.first_name;const lastName=data.last_name!==void 0?data.last_name.trim():agent.last_name;const displayName=`${firstName} ${lastName}`.trim();updates.push(`display_name = $${paramIdx++}`);params.push(displayName);if(data.username!==void 0){const username=data.username.trim().toLowerCase();const existing=await this.pg.query(`SELECT id FROM users WHERE tenant_id = $1 AND LOWER(username) = $2 AND id != $3`,[tenantId,username,agentId]);if(existing.rows.length>0){const conflictErr=new Error("\u0646\u0627\u0645 \u06A9\u0627\u0631\u0628\u0631\u06CC \u0642\u0628\u0644\u0627\u064B \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u062B\u0628\u062A \u0634\u062F\u0647 \u0627\u0633\u062A.");conflictErr.status=409;conflictErr.code="DUPLICATE_USER";throw conflictErr}updates.push(`username = $${paramIdx++}`);params.push(username)}if(data.phone!==void 0){const normalizedPhone=normalizeIranianPhone(data.phone);const existing=await this.pg.query(`SELECT id FROM users WHERE tenant_id = $1 AND phone = $2 AND id != $3`,[tenantId,normalizedPhone,agentId]);if(existing.rows.length>0){const conflictErr=new Error("\u0634\u0645\u0627\u0631\u0647 \u0647\u0645\u0631\u0627\u0647 \u0642\u0628\u0644\u0627\u064B \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u062B\u0628\u062A \u0634\u062F\u0647 \u0627\u0633\u062A.");conflictErr.status=409;conflictErr.code="DUPLICATE_USER";throw conflictErr}updates.push(`phone = $${paramIdx++}`);params.push(normalizedPhone)}if(data.email!==void 0){const email=data.email?data.email.trim().toLowerCase():null;updates.push(`email = $${paramIdx++}`);params.push(email)}if(data.role_code!==void 0){updates.push(`role_code = $${paramIdx++}`);params.push(data.role_code)}if(data.branch_id!==void 0){updates.push(`branch_id = $${paramIdx++}`);params.push(data.branch_id||null)}if(updates.length>1){updates.push(`updated_at = CURRENT_TIMESTAMP`);params.push(agentId,tenantId);const query=`UPDATE users SET ${updates.join(", ")} WHERE id = $${paramIdx++} AND tenant_id = $${paramIdx++}`;await this.pg.query(query,params);await this.addAuditLog(tenantId,actorUserId,"AGENT_UPDATED","USER",agentId,{updates:data})}const updated=await this.getUserById(agentId);const{password_hash,...safeUser}=updated;return safeUser}async setAgentStatus(tenantId,actorUserId,agentId,isActive){await this.init();const agent=await this.getUserById(agentId);if(!agent||agent.tenant_id!==tenantId){const err=new Error("\u0645\u0634\u0627\u0648\u0631 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="AGENT_NOT_FOUND";throw err}if(agentId===actorUserId&&!isActive){const err=new Error("\u0627\u0645\u06A9\u0627\u0646 \u063A\u06CC\u0631\u0641\u0639\u0627\u0644\u200C\u0633\u0627\u0632\u06CC \u062D\u0633\u0627\u0628 \u06A9\u0627\u0631\u0628\u0631\u06CC \u062E\u0648\u062F\u062A\u0627\u0646 \u0648\u062C\u0648\u062F \u0646\u062F\u0627\u0631\u062F.");err.status=400;err.code="CANNOT_DEACTIVATE_SELF";throw err}if(isActive&&!agent.is_active){await this.assertAgentQuota(tenantId)}await this.pg.query(`UPDATE users SET is_active = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND tenant_id = $3`,[isActive,agentId,tenantId]);if(!isActive){await this.pg.query(`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND tenant_id = $2 AND revoked_at IS NULL`,[agentId,tenantId]);await this.addAuditLog(tenantId,actorUserId,"AGENT_DEACTIVATED","USER",agentId)}else{await this.addAuditLog(tenantId,actorUserId,"AGENT_ACTIVATED","USER",agentId)}const updated=await this.getUserById(agentId);const{password_hash,...safeUser}=updated;return safeUser}async createSession(userId,tenantId,ip,ua){await this.init();const rawToken=crypto.randomBytes(32).toString("hex");const tokenHash=crypto.createHash("sha256").update(rawToken).digest("hex");const expiresAt=new Date(Date.now()+14*864e5).toISOString();const id=crypto.randomUUID();await this.pg.query(`INSERT INTO sessions (id, user_id, tenant_id, token_hash, expires_at, ip_address, user_agent)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,[id,userId,tenantId,tokenHash,expiresAt,ip||null,ua||null]);return rawToken}async getSessionByToken(rawToken){if(!rawToken)return null;await this.init();const tokenHash=crypto.createHash("sha256").update(rawToken).digest("hex");const res=await this.pg.query(`SELECT * FROM sessions WHERE token_hash = $1 AND revoked_at IS NULL LIMIT 1`,[tokenHash]);const session=res.rows[0];if(!session)return null;if(new Date(session.expires_at)<new Date){await this.revokeSession(rawToken);return null}this.pg.query(`UPDATE sessions SET last_used_at = CURRENT_TIMESTAMP WHERE id = $1`,[session.id]).catch(()=>{});return session}async getSessionByTokenAny(rawToken){if(!rawToken)return null;await this.init();const tokenHash=crypto.createHash("sha256").update(rawToken).digest("hex");const res=await this.pg.query(`SELECT * FROM sessions WHERE token_hash = $1 LIMIT 1`,[tokenHash]);return res.rows[0]||null}async revokeSession(rawToken){if(!rawToken)return;await this.init();const tokenHash=crypto.createHash("sha256").update(rawToken).digest("hex");await this.pg.query(`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = $1`,[tokenHash])}async getOwners(tenantId){await this.init();const res=await this.pg.query(`SELECT * FROM owners WHERE tenant_id = $1 AND is_archived = false ORDER BY created_at DESC`,[tenantId]);return res.rows}async getOwnerById(tenantId,id){await this.init();const res=await this.pg.query(`SELECT * FROM owners WHERE tenant_id = $1 AND id = $2 AND is_archived = false LIMIT 1`,[tenantId,id]);return res.rows[0]||null}async createOwner(tenantId,data){await this.init();const id=crypto.randomUUID();const normalizedPhone=normalizeIranianPhone(data.phone);const displayName=`${data.first_name} ${data.last_name}`.trim();try{await this.pg.query(`INSERT INTO owners (id, tenant_id, first_name, last_name, display_name, phone, secondary_phone, email, national_id, address, notes)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,[id,tenantId,data.first_name.trim(),data.last_name.trim(),displayName,normalizedPhone,data.secondary_phone?normalizeIranianPhone(data.secondary_phone):null,data.email||null,data.national_id||null,data.address||null,data.notes||null])}catch(err){if(err.code==="23505"){const conflictErr=new Error(`\u0645\u0627\u0644\u06A9 \u0628\u0627 \u0634\u0645\u0627\u0631\u0647 \u062A\u0645\u0627\u0633 ${normalizedPhone} \u0642\u0628\u0644\u0627\u064B \u062B\u0628\u062A \u0634\u062F\u0647 \u0627\u0633\u062A.`);conflictErr.status=409;conflictErr.code="DUPLICATE_OWNER";throw conflictErr}throw err}await this.addAuditLog(tenantId,null,"OWNER_CREATED","OWNER",id);const owner=await this.getOwnerById(tenantId,id);return owner}async linkPropertyOwner(tenantId, propertyId, ownerId, percentage = 100, isPrimary = true, notes = null) {
     await this.init();
@@ -737,7 +978,7 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
       FROM branches b
       LEFT JOIN users u ON u.id = b.manager_user_id
       WHERE b.tenant_id = $1
-    `;const params=[tenantId];if(options.status&&options.status!=="ALL"){params.push(options.status);query+=` AND b.status = ${params.length}`}query+=` ORDER BY b.is_main DESC, b.created_at ASC`;const res=await this.pg.query(query,params);return res.rows.map(row=>({id:row.id,tenant_id:row.tenant_id,branch_code:row.branch_code,name:row.name,phone:row.phone,address:row.address,manager_user_id:row.manager_user_id,manager_name:row.manager_name,is_main:Boolean(row.is_main),status:row.status,members_count:Number(row.members_count||0),properties_count:Number(row.properties_count||0),created_at:row.created_at,updated_at:row.updated_at}))}async getBranchById(tenantId,branchId){await this.init();const res=await this.pg.query(`
+    `;const params=[tenantId];if(options.status&&options.status!=="ALL"){params.push(options.status);query+=` AND b.status = $${params.length}`}query+=` ORDER BY b.is_main DESC, b.created_at ASC`;const res=await this.pg.query(query,params);return res.rows.map(row=>({id:row.id,tenant_id:row.tenant_id,branch_code:row.branch_code,name:row.name,phone:row.phone,address:row.address,manager_user_id:row.manager_user_id,manager_name:row.manager_name,is_main:Boolean(row.is_main),status:row.status,members_count:Number(row.members_count||0),properties_count:Number(row.properties_count||0),created_at:row.created_at,updated_at:row.updated_at}))}async getBranchById(tenantId,branchId){await this.init();const res=await this.pg.query(`
       SELECT b.*,
              u.display_name as manager_name,
              (SELECT COUNT(*)::int FROM users u2 WHERE u2.tenant_id = b.tenant_id AND u2.branch_id = b.id AND u2.is_active = true) as members_count,
@@ -746,16 +987,16 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
       LEFT JOIN users u ON u.id = b.manager_user_id
       WHERE b.tenant_id = $1 AND b.id = $2
       LIMIT 1
-    `,[tenantId,branchId]);if(res.rows.length===0)return null;const row=res.rows[0];return{id:row.id,tenant_id:row.tenant_id,branch_code:row.branch_code,name:row.name,phone:row.phone,address:row.address,manager_user_id:row.manager_user_id,manager_name:row.manager_name,is_main:Boolean(row.is_main),status:row.status,members_count:Number(row.members_count||0),properties_count:Number(row.properties_count||0),created_at:row.created_at,updated_at:row.updated_at}}async createBranch(tenantId,actorUserId,data){await this.init();const id=crypto.randomUUID();const branchCode=data.branch_code.trim().toUpperCase();const name=data.name.trim();const existing=await this.pg.query(`SELECT id FROM branches WHERE tenant_id = $1 AND UPPER(branch_code) = UPPER($2) LIMIT 1`,[tenantId,branchCode]);if(existing.rows.length>0){const err=new Error(`\u06A9\u062F \u0634\u0639\u0628\u0647 \xAB${branchCode}\xBB \u0642\u0628\u0644\u0627\u064B \u062F\u0631 \u0627\u06CC\u0646 \u062F\u0641\u062A\u0631 \u062B\u0628\u062A \u0634\u062F\u0647 \u0627\u0633\u062A.`);err.status=409;err.code="DUPLICATE_BRANCH_CODE";throw err}const isMain=Boolean(data.is_main);if(isMain){await this.pg.query(`UPDATE branches SET is_main = false, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1`,[tenantId])}const managerId=data.manager_user_id||null;const status=data.status||"ACTIVE";await this.pg.query(`
+    `,[tenantId,branchId]);if(res.rows.length===0)return null;const row=res.rows[0];return{id:row.id,tenant_id:row.tenant_id,branch_code:row.branch_code,name:row.name,phone:row.phone,address:row.address,manager_user_id:row.manager_user_id,manager_name:row.manager_name,is_main:Boolean(row.is_main),status:row.status,members_count:Number(row.members_count||0),properties_count:Number(row.properties_count||0),created_at:row.created_at,updated_at:row.updated_at}}async createBranch(tenantId,actorUserId,data){await this.init();const id=crypto.randomUUID();const branchCode=data.branch_code.trim().toUpperCase();const name=data.name.trim();const status=data.status||"ACTIVE";if(status==="ACTIVE"){await this.assertBranchQuota(tenantId)}const existing=await this.pg.query(`SELECT id FROM branches WHERE tenant_id = $1 AND UPPER(branch_code) = UPPER($2) LIMIT 1`,[tenantId,branchCode]);if(existing.rows.length>0){const err=new Error(`کد شعبه «${branchCode}» قبلاً در این دفتر ثبت شده است.`);err.status=409;err.code="DUPLICATE_BRANCH_CODE";throw err}const managerId=data.manager_user_id||null;if(managerId){const mgrCheck=await this.pg.query(`SELECT id FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1`,[managerId,tenantId]);if(mgrCheck.rows.length===0){const err=new Error("کاربر انتخاب‌شده برای مدیریت شعبه در این دفتر یافت نشد.");err.status=400;err.code="INVALID_MANAGER_USER";throw err}}const isMain=Boolean(data.is_main);if(isMain){await this.pg.query(`UPDATE branches SET is_main = false, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1`,[tenantId])}await this.pg.query(`
       INSERT INTO branches (id, tenant_id, branch_code, name, phone, address, manager_user_id, is_main, status, created_at, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `,[id,tenantId,branchCode,name,data.phone?.trim()||null,data.address?.trim()||null,managerId,isMain,status]);if(managerId){await this.pg.query(`
         UPDATE users SET branch_id = $1, role_code = CASE WHEN role_code = 'AGENT' THEN 'BRANCH_MANAGER' ELSE role_code END, updated_at = CURRENT_TIMESTAMP
         WHERE id = $2 AND tenant_id = $3
-      `,[id,managerId,tenantId])}await this.addAuditLog(tenantId,actorUserId,"BRANCH_CREATED","BRANCH",id,{name,branch_code:branchCode,is_main:isMain,manager_user_id:managerId});return this.getBranchById(tenantId,id)}async updateBranch(tenantId,actorUserId,branchId,data){await this.init();const branch=await this.getBranchById(tenantId,branchId);if(!branch){const err=new Error("\u0634\u0639\u0628\u0647 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="BRANCH_NOT_FOUND";throw err}const updates=[];const params=[];let idx=1;if(data.name!==void 0){updates.push(`name = ${idx++}`);params.push(data.name.trim())}if(data.branch_code!==void 0){const code=data.branch_code.trim().toUpperCase();const existing=await this.pg.query(`SELECT id FROM branches WHERE tenant_id = $1 AND UPPER(branch_code) = UPPER($2) AND id != $3 LIMIT 1`,[tenantId,code,branchId]);if(existing.rows.length>0){const err=new Error(`\u06A9\u062F \u0634\u0639\u0628\u0647 \xAB${code}\xBB \u062A\u06A9\u0631\u0627\u0631\u06CC \u0627\u0633\u062A.`);err.status=409;err.code="DUPLICATE_BRANCH_CODE";throw err}updates.push(`branch_code = ${idx++}`);params.push(code)}if(data.phone!==void 0){updates.push(`phone = ${idx++}`);params.push(data.phone?.trim()||null)}if(data.address!==void 0){updates.push(`address = ${idx++}`);params.push(data.address?.trim()||null)}if(data.manager_user_id!==void 0){const managerId=data.manager_user_id||null;updates.push(`manager_user_id = ${idx++}`);params.push(managerId);if(managerId){await this.pg.query(`
+      `,[id,managerId,tenantId])}await this.addAuditLog(tenantId,actorUserId,"BRANCH_CREATED","BRANCH",id,{name,branch_code:branchCode,is_main:isMain,manager_user_id:managerId});return this.getBranchById(tenantId,id)}async updateBranch(tenantId,actorUserId,branchId,data){await this.init();const branch=await this.getBranchById(tenantId,branchId);if(!branch){const err=new Error("شعبه مورد نظر یافت نشد.");err.status=404;err.code="BRANCH_NOT_FOUND";throw err}if(data.status==="ACTIVE"&&branch.status!=="ACTIVE"){await this.assertBranchQuota(tenantId)}const updates=[];const params=[];let idx=1;if(data.name!==void 0){updates.push(`name = $${idx++}`);params.push(data.name.trim())}if(data.branch_code!==void 0){const code=data.branch_code.trim().toUpperCase();const existing=await this.pg.query(`SELECT id FROM branches WHERE tenant_id = $1 AND UPPER(branch_code) = UPPER($2) AND id != $3 LIMIT 1`,[tenantId,code,branchId]);if(existing.rows.length>0){const err=new Error(`کد شعبه «${code}» تکراری است.`);err.status=409;err.code="DUPLICATE_BRANCH_CODE";throw err}updates.push(`branch_code = $${idx++}`);params.push(code)}if(data.phone!==void 0){updates.push(`phone = $${idx++}`);params.push(data.phone?data.phone.trim()||null:null)}if(data.address!==void 0){updates.push(`address = $${idx++}`);params.push(data.address?data.address.trim()||null:null)}let newManagerIdToSync=null;if(data.manager_user_id!==void 0){const managerId=data.manager_user_id||null;if(managerId){const mgrCheck=await this.pg.query(`SELECT id FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1`,[managerId,tenantId]);if(mgrCheck.rows.length===0){const err=new Error("کاربر انتخاب‌شده برای مدیریت شعبه در این دفتر یافت نشد.");err.status=400;err.code="INVALID_MANAGER_USER";throw err}newManagerIdToSync=managerId}updates.push(`manager_user_id = $${idx++}`);params.push(managerId)}if(data.is_main!==void 0){if(data.is_main===true){updates.push(`is_main = $${idx++}`);params.push(true)}else if(data.is_main===false&&branch.is_main){const err=new Error("دفتر باید حداقل یک شعبه اصلی داشته باشد.");err.status=400;err.code="CANNOT_UNSET_ONLY_MAIN_BRANCH";throw err}}if(data.status!==void 0){if(data.status==="INACTIVE"&&branch.is_main){const err=new Error("امکان غیرفعالسازی شعبه اصلی دفتر وجود ندارد.");err.status=400;err.code="CANNOT_DEACTIVATE_MAIN_BRANCH";throw err}updates.push(`status = $${idx++}`);params.push(data.status)}if(data.is_main===true){await this.pg.query(`UPDATE branches SET is_main = false, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1 AND id != $2`,[tenantId,branchId])}if(updates.length>0){updates.push(`updated_at = CURRENT_TIMESTAMP`);params.push(branchId,tenantId);await this.pg.query(`UPDATE branches SET ${updates.join(", ")} WHERE id = $${idx++} AND tenant_id = $${idx++}`,params);if(newManagerIdToSync){await this.pg.query(`
           UPDATE users SET branch_id = $1, role_code = CASE WHEN role_code = 'AGENT' THEN 'BRANCH_MANAGER' ELSE role_code END, updated_at = CURRENT_TIMESTAMP
           WHERE id = $2 AND tenant_id = $3
-        `,[branchId,managerId,tenantId])}}if(data.is_main!==void 0){if(data.is_main===true){await this.pg.query(`UPDATE branches SET is_main = false, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = $1 AND id != $2`,[tenantId,branchId]);updates.push(`is_main = ${idx++}`);params.push(true)}else if(data.is_main===false&&branch.is_main){const err=new Error("\u062F\u0641\u062A\u0631 \u0628\u0627\u06CC\u062F \u062D\u062F\u0627\u0642\u0644 \u06CC\u06A9 \u0634\u0639\u0628\u0647 \u0627\u0635\u0644\u06CC \u062F\u0627\u0634\u062A\u0647 \u0628\u0627\u0634\u062F.");err.status=400;err.code="CANNOT_UNSET_ONLY_MAIN_BRANCH";throw err}}if(data.status!==void 0){if(data.status==="INACTIVE"&&branch.is_main){const err=new Error("\u0627\u0645\u06A9\u0627\u0646 \u063A\u06CC\u0631\u0641\u0639\u0627\u0644\u200C\u0633\u0627\u0632\u06CC \u0634\u0639\u0628\u0647 \u0627\u0635\u0644\u06CC \u062F\u0641\u062A\u0631 \u0648\u062C\u0648\u062F \u0646\u062F\u0627\u0631\u062F.");err.status=400;err.code="CANNOT_DEACTIVATE_MAIN_BRANCH";throw err}updates.push(`status = ${idx++}`);params.push(data.status)}if(updates.length>0){updates.push(`updated_at = CURRENT_TIMESTAMP`);params.push(branchId,tenantId);await this.pg.query(`UPDATE branches SET ${updates.join(", ")} WHERE id = ${idx++} AND tenant_id = ${idx++}`,params);await this.addAuditLog(tenantId,actorUserId,"BRANCH_UPDATED","BRANCH",branchId,data)}return this.getBranchById(tenantId,branchId)}async deleteBranch(tenantId,actorUserId,branchId,targetBranchId){await this.init();const branch=await this.getBranchById(tenantId,branchId);if(!branch){const err=new Error("\u0634\u0639\u0628\u0647 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="BRANCH_NOT_FOUND";throw err}if(branch.is_main){const err=new Error("\u0627\u0645\u06A9\u0627\u0646 \u062D\u0630\u0641 \u06CC\u0627 \u063A\u06CC\u0631\u0641\u0639\u0627\u0644\u200C\u0633\u0627\u0632\u06CC \u0634\u0639\u0628\u0647 \u0627\u0635\u0644\u06CC \u062F\u0641\u062A\u0631 \u0648\u062C\u0648\u062F \u0646\u062F\u0627\u0631\u062F.");err.status=400;err.code="CANNOT_DELETE_MAIN_BRANCH";throw err}if(targetBranchId){const targetBranch=await this.getBranchById(tenantId,targetBranchId);if(!targetBranch||targetBranch.status!=="ACTIVE"){const err=new Error("\u0634\u0639\u0628\u0647 \u0645\u0642\u0635\u062F \u0628\u0631\u0627\u06CC \u0627\u0646\u062A\u0642\u0627\u0644 \u067E\u0631\u0648\u0646\u062F\u0647\u200C\u0647\u0627 \u0645\u0639\u062A\u0628\u0631 \u06CC\u0627 \u0641\u0639\u0627\u0644 \u0646\u06CC\u0633\u062A.");err.status=400;err.code="INVALID_TARGET_BRANCH";throw err}await this.pg.query(`UPDATE users SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId]);await this.pg.query(`UPDATE properties SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId]);await this.pg.query(`UPDATE customers SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId]);await this.pg.query(`UPDATE tasks SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId]);await this.pg.query(`UPDATE transactions SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId]);await this.pg.query(`UPDATE documents SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId])}await this.pg.query(`UPDATE branches SET status = 'INACTIVE', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND tenant_id = $2`,[branchId,tenantId]);await this.addAuditLog(tenantId,actorUserId,"BRANCH_DEACTIVATED","BRANCH",branchId,{target_branch_id:targetBranchId});return true}async getProperties(tenantId,filters={},requestingUser=null){await this.init();let query=`
+        `,[branchId,newManagerIdToSync,tenantId])}await this.addAuditLog(tenantId,actorUserId,"BRANCH_UPDATED","BRANCH",branchId,data)}return this.getBranchById(tenantId,branchId)}async deleteBranch(tenantId,actorUserId,branchId,targetBranchId){await this.init();const branch=await this.getBranchById(tenantId,branchId);if(!branch){const err=new Error("\u0634\u0639\u0628\u0647 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="BRANCH_NOT_FOUND";throw err}if(branch.is_main){const err=new Error("\u0627\u0645\u06A9\u0627\u0646 \u062D\u0630\u0641 \u06CC\u0627 \u063A\u06CC\u0631\u0641\u0639\u0627\u0644\u200C\u0633\u0627\u0632\u06CC \u0634\u0639\u0628\u0647 \u0627\u0635\u0644\u06CC \u062F\u0641\u062A\u0631 \u0648\u062C\u0648\u062F \u0646\u062F\u0627\u0631\u062F.");err.status=400;err.code="CANNOT_DELETE_MAIN_BRANCH";throw err}if(targetBranchId){const targetBranch=await this.getBranchById(tenantId,targetBranchId);if(!targetBranch||targetBranch.status!=="ACTIVE"){const err=new Error("\u0634\u0639\u0628\u0647 \u0645\u0642\u0635\u062F \u0628\u0631\u0627\u06CC \u0627\u0646\u062A\u0642\u0627\u0644 \u067E\u0631\u0648\u0646\u062F\u0647\u200C\u0647\u0627 \u0645\u0639\u062A\u0628\u0631 \u06CC\u0627 \u0641\u0639\u0627\u0644 \u0646\u06CC\u0633\u062A.");err.status=400;err.code="INVALID_TARGET_BRANCH";throw err}await this.pg.query(`UPDATE users SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId]);await this.pg.query(`UPDATE properties SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId]);await this.pg.query(`UPDATE customers SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId]);await this.pg.query(`UPDATE tasks SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId]);await this.pg.query(`UPDATE transactions SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId]);await this.pg.query(`UPDATE documents SET branch_id = $1 WHERE tenant_id = $2 AND branch_id = $3`,[targetBranchId,tenantId,branchId])}await this.pg.query(`UPDATE branches SET status = 'INACTIVE', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND tenant_id = $2`,[branchId,tenantId]);await this.addAuditLog(tenantId,actorUserId,"BRANCH_DEACTIVATED","BRANCH",branchId,{target_branch_id:targetBranchId});return true}async getProperties(tenantId,filters={},requestingUser=null){await this.init();let query=`
       SELECT p.*,
              b.name as branch_name,
              (SELECT file_url FROM property_media pm WHERE pm.property_id = p.id AND pm.is_cover = true LIMIT 1) as cover_image,
@@ -846,7 +1087,7 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
        LIMIT 1`,[shareToken]);if(res.rows.length===0)return null;const row=res.rows[0];const mediaList=await this.pg.query(`SELECT id, file_url, thumbnail_url, media_type, is_cover 
        FROM property_media 
        WHERE property_id = $1 
-       ORDER BY sort_order ASC, created_at ASC`,[row.id]);return{share_token:row.share_token,code:row.code,title:row.title,property_type:row.property_type,listing_type:row.listing_type,status:row.status,price_total:row.price_total?Number(row.price_total):void 0,price_per_meter:row.price_per_meter?Number(row.price_per_meter):void 0,rent_amount:row.rent_amount?Number(row.rent_amount):void 0,deposit_amount:row.deposit_amount?Number(row.deposit_amount):void 0,area_sqm:Number(row.area_sqm),bedrooms:row.bedrooms,floor:row.floor,has_parking:Boolean(row.has_parking),has_storage:Boolean(row.has_storage),has_elevator:Boolean(row.has_elevator),has_balcony:Boolean(row.has_balcony),description:row.description,province:row.province||"\u062A\u0647\u0631\u0627\u0646",city:row.city||"\u062A\u0647\u0631\u0627\u0646",neighborhood:row.neighborhood,media:mediaList.rows.map(m=>({id:m.id,url:m.file_url,thumbnail_url:m.thumbnail_url||m.file_url,media_type:m.media_type,is_cover:Boolean(m.is_cover)})),agency:{name:row.agency_name||"\u062F\u0641\u062A\u0631 \u0627\u0645\u0644\u0627\u06A9",phone:row.agency_phone||void 0},agent:{display_name:row.agent_name||"\u0645\u0634\u0627\u0648\u0631 \u0627\u0645\u0644\u0627\u06A9",phone:row.agent_phone||void 0}}}async createProperty(tenantId,userId,data,userRole){await this.init();const id=crypto.randomUUID();const nextCode=await this.getNextPropertyCode(tenantId);const shareToken=`p_${crypto.randomBytes(6).toString("hex")}`;const pricePerMeter=data.price_total&&data.area_sqm?Math.round(Number(data.price_total)/Number(data.area_sqm)):null;const district=data.district?.trim()||data.neighborhood?.trim()||null;const neighborhood=data.neighborhood?.trim()||data.district?.trim()||null;const visibility=data.visibility==="PRIVATE"?"PRIVATE":"AGENCY";const isManager=this.isManagerUser({role_code:userRole});const assignedAgentId=isManager&&(data.assigned_to_user_id||data.assigned_agent_id)?data.assigned_to_user_id||data.assigned_agent_id:userId;let propBranchId=data.branch_id||null;if(!propBranchId){const u=await this.getUserById(userId);propBranchId=u?.branch_id||null}if(!propBranchId){const mainB=await this.pg.query(`SELECT id FROM branches WHERE tenant_id = $1 AND is_main = true LIMIT 1`,[tenantId]);propBranchId=mainB.rows[0]?.id||null}try{await this.pg.query(`INSERT INTO properties (
+       ORDER BY sort_order ASC, created_at ASC`,[row.id]);return{share_token:row.share_token,code:row.code,title:row.title,property_type:row.property_type,listing_type:row.listing_type,status:row.status,price_total:row.price_total?Number(row.price_total):void 0,price_per_meter:row.price_per_meter?Number(row.price_per_meter):void 0,rent_amount:row.rent_amount?Number(row.rent_amount):void 0,deposit_amount:row.deposit_amount?Number(row.deposit_amount):void 0,area_sqm:Number(row.area_sqm),bedrooms:row.bedrooms,floor:row.floor,has_parking:Boolean(row.has_parking),has_storage:Boolean(row.has_storage),has_elevator:Boolean(row.has_elevator),has_balcony:Boolean(row.has_balcony),description:row.description,province:row.province||"",city:row.city||"",neighborhood:row.neighborhood,media:mediaList.rows.map(m=>({id:m.id,url:m.file_url,thumbnail_url:m.thumbnail_url||m.file_url,media_type:m.media_type,is_cover:Boolean(m.is_cover)})),agency:{name:row.agency_name||"\u062F\u0641\u062A\u0631 \u0627\u0645\u0644\u0627\u06A9",phone:row.agency_phone||void 0},agent:{display_name:row.agent_name||"\u0645\u0634\u0627\u0648\u0631 \u0627\u0645\u0644\u0627\u06A9",phone:row.agent_phone||void 0}}}async createProperty(tenantId,userId,data,userRole){await this.init();const id=crypto.randomUUID();const nextCode=await this.getNextPropertyCode(tenantId);const shareToken=`p_${crypto.randomBytes(6).toString("hex")}`;const pricePerMeter=data.price_total&&data.area_sqm?Math.round(Number(data.price_total)/Number(data.area_sqm)):null;const district=data.district?.trim()||data.neighborhood?.trim()||null;const neighborhood=data.neighborhood?.trim()||data.district?.trim()||null;const visibility=data.visibility==="PRIVATE"?"PRIVATE":"AGENCY";const isManager=this.isManagerUser({role_code:userRole});const assignedAgentId=isManager&&(data.assigned_to_user_id||data.assigned_agent_id)?data.assigned_to_user_id||data.assigned_agent_id:userId;let propBranchId=data.branch_id||null;if(!propBranchId){const u=await this.getUserById(userId);propBranchId=u?.branch_id||null}if(!propBranchId){const mainB=await this.pg.query(`SELECT id FROM branches WHERE tenant_id = $1 AND is_main = true LIMIT 1`,[tenantId]);propBranchId=mainB.rows[0]?.id||null}try{await this.pg.query(`INSERT INTO properties (
           id, tenant_id, code, title, property_type, listing_type, status,
           price_total, price_per_meter, rent_amount, deposit_amount, area_sqm,
           bedrooms, floor, has_parking, has_elevator, has_storage, has_balcony,
@@ -860,7 +1101,7 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
           $18, $19, $20, $21, $22,
           $23, $24, $25,
           $26, true, $27
-         )`,[id,tenantId,nextCode,data.title.trim(),data.property_type,data.listing_type,data.price_total||null,pricePerMeter,data.rent_amount||null,data.deposit_amount||null,Number(data.area_sqm),data.bedrooms||null,data.floor||null,Boolean(data.has_parking),Boolean(data.has_elevator),Boolean(data.has_storage),Boolean(data.has_balcony),data.description||null,data.province||"\u062A\u0647\u0631\u0627\u0646",data.city||"\u062A\u0647\u0631\u0627\u0646",neighborhood,district,visibility,assignedAgentId,userId,shareToken,propBranchId])}catch(err){if(err.code==="23505"){const conflictErr=new Error(`\u0645\u0644\u06A9\u06CC \u0628\u0627 \u06A9\u062F ${nextCode} \u0642\u0628\u0644\u0627\u064B \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u062B\u0628\u062A \u0634\u062F\u0647 \u0627\u0633\u062A.`);conflictErr.status=409;conflictErr.code="DUPLICATE_PROPERTY";throw conflictErr}throw err}if(data.owner_name&&data.owner_phone){try{const normalizedOwnerPhone=normalizeIranianPhone(data.owner_phone);let owner=await this.pg.query(`SELECT id FROM owners WHERE tenant_id = $1 AND phone = $2 LIMIT 1`,[tenantId,normalizedOwnerPhone]);let ownerId=owner.rows[0]?.id;if(!ownerId){const parts=data.owner_name.trim().split(" ");const fn=parts[0]||"\u0645\u0627\u0644\u06A9";const ln=parts.slice(1).join(" ")||"\u0645\u0644\u06A9";const newOwner=await this.createOwner(tenantId,{first_name:fn,last_name:ln,phone:normalizedOwnerPhone});ownerId=newOwner.id}await this.linkPropertyOwner(tenantId,id,ownerId)}catch{}}await this.addAuditLog(tenantId,userId,"PROPERTY_CREATED","PROPERTY",id,{code:nextCode,visibility});const p=await this.getPropertyById(tenantId,id);return p}async updateProperty(tenantId,propertyId,data,userId,userRole){await this.init();const isManager=this.isManagerUser({role_code:userRole});const existing=await this.getPropertyById(tenantId,propertyId,{id:userId,role_code:userRole||"AGENT"});if(!existing){const err=new Error("\u0645\u0644\u06A9 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F \u06CC\u0627 \u062F\u0633\u062A\u0631\u0633\u06CC \u0645\u062C\u0627\u0632 \u0646\u06CC\u0633\u062A.");err.status=404;err.code="PROPERTY_NOT_FOUND";throw err}if(!isManager&&existing.assigned_agent_id!==userId&&existing.created_by_user_id!==userId){const err=new Error("\u0634\u0645\u0627 \u062F\u0633\u062A\u0631\u0633\u06CC \u0648\u06CC\u0631\u0627\u06CC\u0634 \u0627\u06CC\u0646 \u0645\u0644\u06A9 \u0631\u0627 \u0646\u062F\u0627\u0631\u06CC\u062F.");err.status=403;err.code="FORBIDDEN";throw err}const priceTotal=data.price_total!==void 0?data.price_total:existing.price_total;const areaSqm=data.area_sqm!==void 0?Number(data.area_sqm):existing.area_sqm;const pricePerMeter=priceTotal&&areaSqm?Math.round(Number(priceTotal)/areaSqm):existing.price_per_meter;const visibility=data.visibility?data.visibility==="PRIVATE"?"PRIVATE":"AGENCY":existing.visibility||"AGENCY";let assignedAgentId=existing.assigned_agent_id;if(isManager&&(data.assigned_to_user_id||data.assigned_agent_id)){assignedAgentId=data.assigned_to_user_id||data.assigned_agent_id}await this.pg.query(`UPDATE properties SET
+         )`,[id,tenantId,nextCode,data.title.trim(),data.property_type,data.listing_type,data.price_total||null,pricePerMeter,data.rent_amount||null,data.deposit_amount||null,Number(data.area_sqm),data.bedrooms||null,data.floor||null,Boolean(data.has_parking),Boolean(data.has_elevator),Boolean(data.has_storage),Boolean(data.has_balcony),data.description||null,data.province?.trim()||"",data.city?.trim()||"",neighborhood,district,visibility,assignedAgentId,userId,shareToken,propBranchId])}catch(err){if(err.code==="23505"){const conflictErr=new Error(`\u0645\u0644\u06A9\u06CC \u0628\u0627 \u06A9\u062F ${nextCode} \u0642\u0628\u0644\u0627\u064B \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u062B\u0628\u062A \u0634\u062F\u0647 \u0627\u0633\u062A.`);conflictErr.status=409;conflictErr.code="DUPLICATE_PROPERTY";throw conflictErr}throw err}if(data.owner_name&&data.owner_phone){try{const normalizedOwnerPhone=normalizeIranianPhone(data.owner_phone);let owner=await this.pg.query(`SELECT id FROM owners WHERE tenant_id = $1 AND phone = $2 LIMIT 1`,[tenantId,normalizedOwnerPhone]);let ownerId=owner.rows[0]?.id;if(!ownerId){const parts=data.owner_name.trim().split(" ");const fn=parts[0]||"\u0645\u0627\u0644\u06A9";const ln=parts.slice(1).join(" ")||"\u0645\u0644\u06A9";const newOwner=await this.createOwner(tenantId,{first_name:fn,last_name:ln,phone:normalizedOwnerPhone});ownerId=newOwner.id}await this.linkPropertyOwner(tenantId,id,ownerId)}catch{}}await this.addAuditLog(tenantId,userId,"PROPERTY_CREATED","PROPERTY",id,{code:nextCode,visibility});const p=await this.getPropertyById(tenantId,id);return p}async updateProperty(tenantId,propertyId,data,userId,userRole){await this.init();const isManager=this.isManagerUser({role_code:userRole});const existing=await this.getPropertyById(tenantId,propertyId,{id:userId,role_code:userRole||"AGENT"});if(!existing){const err=new Error("\u0645\u0644\u06A9 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F \u06CC\u0627 \u062F\u0633\u062A\u0631\u0633\u06CC \u0645\u062C\u0627\u0632 \u0646\u06CC\u0633\u062A.");err.status=404;err.code="PROPERTY_NOT_FOUND";throw err}if(!isManager&&existing.assigned_agent_id!==userId&&existing.created_by_user_id!==userId){const err=new Error("\u0634\u0645\u0627 \u062F\u0633\u062A\u0631\u0633\u06CC \u0648\u06CC\u0631\u0627\u06CC\u0634 \u0627\u06CC\u0646 \u0645\u0644\u06A9 \u0631\u0627 \u0646\u062F\u0627\u0631\u06CC\u062F.");err.status=403;err.code="FORBIDDEN";throw err}const priceTotal=data.price_total!==void 0?data.price_total:existing.price_total;const areaSqm=data.area_sqm!==void 0?Number(data.area_sqm):existing.area_sqm;const pricePerMeter=priceTotal&&areaSqm?Math.round(Number(priceTotal)/areaSqm):existing.price_per_meter;const visibility=data.visibility?data.visibility==="PRIVATE"?"PRIVATE":"AGENCY":existing.visibility||"AGENCY";const nextNeighborhood=data.neighborhood!==void 0?(data.neighborhood?.trim()||null):(existing.address?.neighborhood||null);const nextDistrict=data.district!==void 0?(data.district?.trim()||null):(data.neighborhood!==void 0?(data.neighborhood?.trim()||null):(existing.address?.district||null));const nextCity=data.city!==void 0?(data.city?.trim()||""):(existing.address?.city||"");let assignedAgentId=existing.assigned_agent_id;if(isManager&&(data.assigned_to_user_id||data.assigned_agent_id)){assignedAgentId=data.assigned_to_user_id||data.assigned_agent_id}await this.pg.query(`UPDATE properties SET
         title = COALESCE($1, title),
         property_type = COALESCE($2, property_type),
         listing_type = COALESCE($3, listing_type),
@@ -876,14 +1117,90 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
         has_storage = COALESCE($13, has_storage),
         has_balcony = COALESCE($14, has_balcony),
         description = COALESCE($15, description),
-        neighborhood = COALESCE($16, neighborhood),
+        neighborhood = $16,
+        district = $22,
+        city = $23,
         visibility = $17,
         assigned_agent_id = $18,
         status = COALESCE($21, status),
         is_archived = CASE WHEN $21::text IS NULL THEN is_archived ELSE $21 = 'ARCHIVED' END,
         archived_at = CASE WHEN $21::text IS NULL THEN archived_at WHEN $21 = 'ARCHIVED' THEN COALESCE(archived_at, CURRENT_TIMESTAMP) ELSE NULL END,
         updated_at = CURRENT_TIMESTAMP
-       WHERE id = $19 AND tenant_id = $20`,[data.title,data.property_type,data.listing_type,priceTotal||null,pricePerMeter||null,data.rent_amount!==void 0?data.rent_amount:existing.rent_amount,data.deposit_amount!==void 0?data.deposit_amount:existing.deposit_amount,areaSqm,data.bedrooms,data.floor,data.has_parking,data.has_elevator,data.has_storage,data.has_balcony,data.description,data.neighborhood,visibility,assignedAgentId,propertyId,tenantId,data.status === "AVAILABLE" ? "ACTIVE" : data.status === "UNDER_NEGOTIATION" ? "NEGOTIATION" : data.status]);if(assignedAgentId!==existing.assigned_agent_id){await this.addAuditLog(tenantId,userId,"PROPERTY_ASSIGNED","PROPERTY",propertyId,{old_agent_id:existing.assigned_agent_id,new_agent_id:assignedAgentId})}await this.addAuditLog(tenantId,userId,"PROPERTY_UPDATED","PROPERTY",propertyId);return await this.getPropertyById(tenantId,propertyId,{id:userId,role_code:userRole||"AGENT"})}async assignProperty(tenantId,propertyId,newAgentId,managerUserId){await this.init();const existing=await this.getPropertyById(tenantId,propertyId);if(!existing){const err=new Error("\u0645\u0644\u06A9 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="PROPERTY_NOT_FOUND";throw err}const agentRes=await this.pg.query(`SELECT id, is_active, display_name FROM users WHERE tenant_id = $1 AND id = $2 LIMIT 1`,[tenantId,newAgentId]);if(agentRes.rows.length===0||!agentRes.rows[0].is_active){const err=new Error("\u0645\u0634\u0627\u0648\u0631 \u0627\u0646\u062A\u062E\u0627\u0628\u200C\u0634\u062F\u0647 \u0645\u0639\u062A\u0628\u0631 \u06CC\u0627 \u0641\u0639\u0627\u0644 \u0646\u06CC\u0633\u062A.");err.status=400;err.code="INVALID_AGENT";throw err}const oldAgentId=existing.assigned_agent_id;await this.pg.query(`UPDATE properties SET assigned_agent_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND tenant_id = $3`,[newAgentId,propertyId,tenantId]);await this.addAuditLog(tenantId,managerUserId,"PROPERTY_ASSIGNED","PROPERTY",propertyId,{old_agent_id:oldAgentId,new_agent_id:newAgentId,new_agent_name:agentRes.rows[0].display_name});return await this.getPropertyById(tenantId,propertyId)}async archiveProperty(tenantId,propertyId,userId){await this.init();await this.pg.query(`UPDATE properties
+       WHERE id = $19 AND tenant_id = $20`,[data.title,data.property_type,data.listing_type,priceTotal||null,pricePerMeter||null,data.rent_amount!==void 0?data.rent_amount:existing.rent_amount,data.deposit_amount!==void 0?data.deposit_amount:existing.deposit_amount,areaSqm,data.bedrooms,data.floor,data.has_parking,data.has_elevator,data.has_storage,data.has_balcony,data.description,nextNeighborhood,visibility,assignedAgentId,propertyId,tenantId,data.status === "AVAILABLE" ? "ACTIVE" : data.status === "UNDER_NEGOTIATION" ? "NEGOTIATION" : data.status,nextDistrict,nextCity]);if(assignedAgentId!==existing.assigned_agent_id){await this.addAuditLog(tenantId,userId,"PROPERTY_ASSIGNED","PROPERTY",propertyId,{old_agent_id:existing.assigned_agent_id,new_agent_id:assignedAgentId})}await this.addAuditLog(tenantId,userId,"PROPERTY_UPDATED","PROPERTY",propertyId);return await this.getPropertyById(tenantId,propertyId,{id:userId,role_code:userRole||"AGENT"})}
+  async getPropertyNeighborhoods(tenantId, requestingUser = null) {
+    await this.init();
+    let whereClause = `WHERE p.tenant_id = $1`;
+    const params = [tenantId];
+    if (requestingUser && !this.isOfficeAdmin(requestingUser)) {
+      if (requestingUser.role_code === "BRANCH_MANAGER") {
+        params.push(requestingUser.id, requestingUser.branch_id || null);
+        whereClause += ` AND (p.visibility = 'AGENCY' OR p.branch_id = $${params.length} OR p.assigned_agent_id = $${params.length - 1} OR (p.assigned_agent_id IS NULL AND p.created_by_user_id = $${params.length - 1}))`;
+      } else {
+        params.push(requestingUser.id, requestingUser.branch_id || null);
+        whereClause += ` AND (p.visibility = 'AGENCY' OR (p.visibility = 'BRANCH' AND p.branch_id = $${params.length}) OR p.assigned_agent_id = $${params.length - 1} OR (p.assigned_agent_id IS NULL AND p.created_by_user_id = $${params.length - 1}))`;
+      }
+    }
+    const res = await this.pg.query(
+      `SELECT DISTINCT COALESCE(NULLIF(TRIM(p.district), ''), NULLIF(TRIM(p.neighborhood), '')) AS name
+       FROM properties p
+       ${whereClause}
+         AND COALESCE(NULLIF(TRIM(p.district), ''), NULLIF(TRIM(p.neighborhood), '')) IS NOT NULL
+       ORDER BY name ASC`,
+      params
+    );
+    return res.rows.map((r) => r.name).filter(Boolean);
+  }
+  async deletePropertyNeighborhood(tenantId, userId, userRole, name, requestingUser = null) {
+    await this.init();
+    const targetName = String(name || "").trim();
+    if (!targetName) {
+      const err = new Error("نام محله الزامی است.");
+      err.status = 400;
+      err.code = "INVALID_NEIGHBORHOOD";
+      throw err;
+    }
+    const countRes = await this.pg.query(
+      `SELECT COUNT(*)::int AS cnt FROM properties
+       WHERE tenant_id = $1 AND (TRIM(COALESCE(neighborhood, '')) = $2 OR TRIM(COALESCE(district, '')) = $2)`,
+      [tenantId, targetName]
+    );
+    const totalMatching = Number(countRes.rows[0]?.cnt || 0);
+    const actor = requestingUser || { id: userId, role_code: userRole || "AGENT" };
+    let scopeClause = `tenant_id = $1 AND (TRIM(COALESCE(neighborhood, '')) = $2 OR TRIM(COALESCE(district, '')) = $2)`;
+    const params = [tenantId, targetName];
+    if (!this.isOfficeAdmin(actor)) {
+      if (this.isBranchManager(actor)) {
+        params.push(userId, actor.branch_id || null);
+        scopeClause += ` AND (branch_id = $${params.length} OR assigned_agent_id = $${params.length - 1} OR created_by_user_id = $${params.length - 1})`;
+      } else {
+        params.push(userId);
+        scopeClause += ` AND (assigned_agent_id = $${params.length} OR created_by_user_id = $${params.length})`;
+      }
+    }
+    const updateRes = await this.pg.query(
+      `UPDATE properties
+       SET neighborhood = CASE WHEN TRIM(COALESCE(neighborhood, '')) = $2 THEN NULL ELSE neighborhood END,
+           district = CASE WHEN TRIM(COALESCE(district, '')) = $2 THEN NULL ELSE district END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE ${scopeClause}
+       RETURNING id`,
+      params
+    );
+    const updatedCount = updateRes.rows?.length ?? updateRes.affectedRows ?? updateRes.rowCount ?? 0;
+    if (totalMatching > 0 && updatedCount === 0) {
+      const err = new Error("امکان حذف این محله فقط برای مشاور مسئول فایل یا مدیریت دفتر وجود دارد.");
+      err.status = 403;
+      err.code = "FORBIDDEN";
+      throw err;
+    }
+    if (updatedCount > 0) {
+      await this.addAuditLog(tenantId, userId, "NEIGHBORHOOD_DELETED", "PROPERTY", tenantId, {
+        neighborhood: targetName,
+        updatedCount
+      });
+    }
+    return { name: targetName, updatedCount };
+  }async assignProperty(tenantId,propertyId,newAgentId,managerUserId){await this.init();const existing=await this.getPropertyById(tenantId,propertyId);if(!existing){const err=new Error("\u0645\u0644\u06A9 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="PROPERTY_NOT_FOUND";throw err}const agentRes=await this.pg.query(`SELECT id, is_active, display_name FROM users WHERE tenant_id = $1 AND id = $2 LIMIT 1`,[tenantId,newAgentId]);if(agentRes.rows.length===0||!agentRes.rows[0].is_active){const err=new Error("\u0645\u0634\u0627\u0648\u0631 \u0627\u0646\u062A\u062E\u0627\u0628\u200C\u0634\u062F\u0647 \u0645\u0639\u062A\u0628\u0631 \u06CC\u0627 \u0641\u0639\u0627\u0644 \u0646\u06CC\u0633\u062A.");err.status=400;err.code="INVALID_AGENT";throw err}const oldAgentId=existing.assigned_agent_id;await this.pg.query(`UPDATE properties SET assigned_agent_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND tenant_id = $3`,[newAgentId,propertyId,tenantId]);await this.addAuditLog(tenantId,managerUserId,"PROPERTY_ASSIGNED","PROPERTY",propertyId,{old_agent_id:oldAgentId,new_agent_id:newAgentId,new_agent_name:agentRes.rows[0].display_name});return await this.getPropertyById(tenantId,propertyId)}async archiveProperty(tenantId,propertyId,userId){await this.init();await this.pg.query(`UPDATE properties
        SET is_archived = true, status = 'ARCHIVED', archived_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
        WHERE id = $1 AND tenant_id = $2`,[propertyId,tenantId]);await this.addAuditLog(tenantId,userId,"PROPERTY_ARCHIVED","PROPERTY",propertyId);return await this.getPropertyById(tenantId,propertyId)}async updatePropertyStatus(tenantId,propertyId,userId,newStatus){await this.init();const existing=await this.getPropertyById(tenantId,propertyId);if(!existing){const err=new Error("\u0645\u0644\u06A9 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="PROPERTY_NOT_FOUND";throw err}newStatus = newStatus === "AVAILABLE" ? "ACTIVE" : newStatus === "UNDER_NEGOTIATION" ? "NEGOTIATION" : newStatus;const isArchived=newStatus==="ARCHIVED";const archivedAt=isArchived?new Date().toISOString():null;await this.pg.query(`UPDATE properties
        SET status = $1, is_archived = $2, archived_at = $3, updated_at = CURRENT_TIMESTAMP
@@ -1191,7 +1508,234 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
     return tasks.find(t => t.id === id) || null;
   }async completeTask(tenantId,taskId,userId,visitResult){await this.init();const completedAt=new Date().toISOString();const taskRes=await this.pg.query(`SELECT * FROM tasks WHERE id = $1 AND tenant_id = $2 LIMIT 1`,[taskId,tenantId]);if(taskRes.rows.length===0)return null;const task=taskRes.rows[0];const updateFields=[`status = 'COMPLETED'`,`completed_at = $1`];const params=[completedAt,taskId,tenantId];if(visitResult){updateFields.push(`visit_result = $4`);params.push(visitResult)}const query=`UPDATE tasks SET ${updateFields.join(", ")} WHERE id = $2 AND tenant_id = $3`;await this.pg.query(query,params);if(task.customer_id){const actionLabel=task.type==="VISIT"?"\u0628\u0627\u0632\u062F\u06CC\u062F \u0645\u0644\u06A9 \u0627\u0646\u062C\u0627\u0645 \u0634\u062F":"\u067E\u06CC\u06AF\u06CC\u0631\u06CC \u062A\u06A9\u0645\u06CC\u0644 \u0634\u062F";let detail=`\u0639\u0646\u0648\u0627\u0646: ${task.title}`;if(visitResult){const resultPersian={INTERESTED:"\u0639\u0644\u0627\u0642\u0647\u200C\u0645\u0646\u062F",NOT_INTERESTED:"\u0639\u062F\u0645 \u0639\u0644\u0627\u0642\u0647",NEED_FOLLOW_UP:"\u0646\u06CC\u0627\u0632 \u0628\u0647 \u067E\u06CC\u06AF\u06CC\u0631\u06CC \u0645\u062C\u062F\u062F",NEGOTIATION_STARTED:"\u0634\u0631\u0648\u0639 \u0645\u0630\u0627\u06A9\u0631\u0647"}[visitResult]||visitResult;detail+=` | \u0628\u0627\u0632\u062E\u0648\u0631\u062F: ${resultPersian}`}await this.createInteraction(tenantId,task.customer_id,userId,{interaction_type:task.type||"FOLLOW_UP",title:`${actionLabel}: ${task.title}`,description:(task.description?`${task.description}
 `:"")+(visitResult?`\u0646\u062A\u06CC\u062C\u0647 \u0628\u0627\u0632\u062F\u06CC\u062F: ${detail}`:""),property_id:task.property_id||void 0,occurred_at:completedAt})}await this.addAuditLog(tenantId,userId,"TASK_COMPLETED","TASK",taskId);const tasks=await this.getTasks(tenantId);return tasks.find(t=>t.id===taskId)||null}async cancelTask(tenantId,taskId,userId){await this.init();const cancelledAt=new Date().toISOString();const taskRes=await this.pg.query(`SELECT * FROM tasks WHERE id = $1 AND tenant_id = $2 LIMIT 1`,[taskId,tenantId]);if(taskRes.rows.length===0)return null;const task=taskRes.rows[0];await this.pg.query(`UPDATE tasks SET status = 'CANCELLED', updated_at = $1 WHERE id = $2 AND tenant_id = $3`,[cancelledAt,taskId,tenantId]);if(task.customer_id){await this.createInteraction(tenantId,task.customer_id,userId,{interaction_type:task.type||"FOLLOW_UP",title:`\u067E\u06CC\u06AF\u06CC\u0631\u06CC \u0644\u063A\u0648 \u0634\u062F: ${task.title}`,description:task.description||void 0,property_id:task.property_id||void 0,occurred_at:cancelledAt})}await this.addAuditLog(tenantId,userId,"TASK_CANCELLED","TASK",taskId);const tasks=await this.getTasks(tenantId);return tasks.find(t=>t.id===taskId)||null}async updateTask(tenantId,taskId,userId,data){await this.init();const taskRes=await this.pg.query(`SELECT * FROM tasks WHERE id = $1 AND tenant_id = $2 LIMIT 1`,[taskId,tenantId]);if(taskRes.rows.length===0)return null;const task=taskRes.rows[0];const updates=[];const params=[];let paramIdx=1;if(data.title!==void 0){updates.push(`title = $${paramIdx++}`);params.push(data.title)}if(data.description!==void 0){updates.push(`description = $${paramIdx++}`);params.push(data.description)}if(data.due_at!==void 0){updates.push(`due_at = $${paramIdx++}`);params.push(data.due_at)}if(data.end_at!==void 0){updates.push(`end_at = $${paramIdx++}`);params.push(data.end_at)}if(data.priority!==void 0){updates.push(`priority = $${paramIdx++}`);params.push(data.priority)}if(data.status!==void 0){updates.push(`status = $${paramIdx++}`);params.push(data.status)}if(data.type!==void 0){updates.push(`type = $${paramIdx++}`);params.push(data.type)}if(data.visit_result!==void 0){updates.push(`visit_result = $${paramIdx++}`);params.push(data.visit_result)}if(data.assigned_to_user_id!==void 0){updates.push(`assigned_user_id = $${paramIdx++}`);params.push(data.assigned_to_user_id)}else if(data.assigned_user_id!==void 0){updates.push(`assigned_user_id = $${paramIdx++}`);params.push(data.assigned_user_id)}if(updates.length>0){updates.push(`updated_at = CURRENT_TIMESTAMP`);params.push(taskId,tenantId);const query=`UPDATE tasks SET ${updates.join(", ")} WHERE id = $${paramIdx++} AND tenant_id = $${paramIdx++}`;await this.pg.query(query,params);if(task.customer_id){let desc=`\u0628\u0631\u0648\u0632\u0631\u0633\u0627\u0646\u06CC \u067E\u06CC\u06AF\u06CC\u0631\u06CC: ${data.title||task.title}`;if(data.status==="COMPLETED"){desc=`\u067E\u06CC\u06AF\u06CC\u0631\u06CC \u0628\u0627 \u0645\u0648\u0641\u0642\u06CC\u062A \u062A\u06A9\u0645\u06CC\u0644 \u0634\u062F: ${data.title||task.title}`}else if(data.status==="CANCELLED"){desc=`\u067E\u06CC\u06AF\u06CC\u0631\u06CC \u0644\u063A\u0648 \u0634\u062F: ${data.title||task.title}`}else if(data.due_at&&data.due_at!==task.due_at){desc=`\u062A\u063A\u06CC\u06CC\u0631 \u0632\u0645\u0627\u0646 \u067E\u06CC\u06AF\u06CC\u0631\u06CC \u0628\u0647: ${new Date(data.due_at).toLocaleDateString("fa-IR")}`}await this.createInteraction(tenantId,task.customer_id,userId,{interaction_type:data.type||task.type,title:desc,description:data.description||void 0,property_id:task.property_id||void 0})}await this.addAuditLog(tenantId,userId,"TASK_UPDATED","TASK",taskId)}const tasks=await this.getTasks(tenantId);return tasks.find(t=>t.id===taskId)||null}async addAuditLog(tenantId,userId,action,entityType=null,entityId=null,metadata=null){try{await this.pg.query(`INSERT INTO audit_logs (id, tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,[crypto.randomUUID(),tenantId,userId,action,entityType,entityId,metadata?JSON.stringify(metadata):null])}catch{}}async getRecentActivities(tenantId,limit=8){await this.init();const res=await this.pg.query(`SELECT * FROM audit_logs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2`,[tenantId,limit]);return res.rows.map(row=>{let title="\u0641\u0639\u0627\u0644\u06CC\u062A \u062F\u0631 \u0633\u06CC\u0633\u062A\u0645";let description=`\u0639\u0645\u0644\u06CC\u0627\u062A ${row.action} \u0627\u0646\u062C\u0627\u0645 \u0634\u062F`;if(row.action==="PROPERTY_CREATED"){title="\u062B\u0628\u062A \u0645\u0644\u06A9 \u062C\u062F\u06CC\u062F";description="\u0641\u0627\u06CC\u0644 \u062C\u062F\u06CC\u062F \u062F\u0631 \u0633\u06CC\u0633\u062A\u0645 \u062B\u0628\u062A \u0648 \u0622\u0645\u0627\u062F\u0647 \u0628\u0627\u0632\u062F\u06CC\u062F \u0634\u062F"}else if(row.action==="CUSTOMER_CREATED"){title="\u062B\u0628\u062A \u0645\u062A\u0642\u0627\u0636\u06CC \u062C\u062F\u06CC\u062F";description="\u0627\u0637\u0644\u0627\u0639\u0627\u062A \u0645\u0634\u062A\u0631\u06CC \u0648 \u0645\u062D\u062F\u0648\u062F\u0647 \u0646\u06CC\u0627\u0632\u0645\u0646\u062F\u06CC \u062F\u0631 \u0633\u0627\u0645\u0627\u0646\u0647 \u0630\u062E\u06CC\u0631\u0647 \u06AF\u0631\u062F\u06CC\u062F"}else if(row.action==="TASK_COMPLETED"){title="\u062A\u06A9\u0645\u06CC\u0644 \u067E\u06CC\u06AF\u06CC\u0631\u06CC";description="\u0648\u0638\u06CC\u0641\u0647 \u067E\u06CC\u06AF\u06CC\u0631\u06CC \u0628\u0627 \u0645\u0648\u0641\u0642\u06CC\u062A \u0627\u0646\u062C\u0627\u0645 \u0648 \u0628\u0647 \u0633\u0648\u0627\u0628\u0642 \u0645\u0646\u062A\u0642\u0644 \u06AF\u0631\u062F\u06CC\u062F"}else if(row.action==="TASK_CREATED"){title="\u062B\u0628\u062A \u067E\u06CC\u06AF\u06CC\u0631\u06CC \u062C\u062F\u06CC\u062F";description="\u0645\u0648\u0639\u062F \u062A\u0645\u0627\u0633 \u0648 \u0627\u0642\u062F\u0627\u0645 \u062C\u062F\u06CC\u062F \u0628\u0631\u0627\u06CC \u0645\u0634\u062A\u0631\u06CC \u062A\u0646\u0638\u06CC\u0645 \u0634\u062F"}else if(row.action==="OWNER_CREATED"){title="\u062B\u0628\u062A \u0645\u0627\u0644\u06A9 \u062C\u062F\u06CC\u062F";description="\u0645\u0634\u062E\u0635\u0627\u062A \u0645\u0627\u0644\u06A9 \u0648 \u0627\u0633\u0646\u0627\u062F \u062F\u0631 \u0633\u06CC\u0633\u062A\u0645 \u0630\u062E\u06CC\u0631\u0647 \u06AF\u0631\u062F\u06CC\u062F"}else if(row.action==="SYSTEM_BOOT"){title="\u0631\u0627\u0647\u200C\u0627\u0646\u062F\u0627\u0632\u06CC \u0633\u0627\u0645\u0627\u0646\u0647 \u0627\u0645\u0644\u0627\u06A9";description="\u0622\u0698\u0627\u0646\u0633 \u0641\u0639\u0627\u0644 \u0648 \u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u06CC \u067E\u0627\u06CC\u0647 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0634\u062F\u0646\u062F"}return{id:row.id,action:row.action,title,description,created_at:row.created_at,entity_type:row.entity_type,entity_id:row.entity_id||void 0}})}async calculateSmartMatches(tenantId,requestingUser){const properties=await this.getProperties(tenantId,{},requestingUser);const customers=await this.getCustomers(tenantId,{},requestingUser);const matches=[];for(const customer of customers){for(const property of properties){let score=0;const reasons=[];if(customer.customer_type==="BUYER"&&property.listing_type==="SALE"){score+=30;reasons.push("\u062A\u0637\u0627\u0628\u0642 \u0646\u0648\u0639 \u0645\u0639\u0627\u0645\u0644\u0647 (\u0641\u0631\u0648\u0634)")}else if(customer.customer_type==="TENANT"&&property.listing_type==="RENT"){score+=30;reasons.push("\u062A\u0637\u0627\u0628\u0642 \u0631\u0647\u0646 \u0648 \u0627\u062C\u0627\u0631\u0647")}if(customer.budget_max&&property.price_total){if(property.price_total<=customer.budget_max){score+=35;reasons.push("\u062F\u0631 \u0645\u062D\u062F\u0648\u062F\u0647 \u0628\u0648\u062F\u062C\u0647 \u0645\u062A\u0642\u0627\u0636\u06CC")}}else if(customer.budget_max&&property.deposit_amount){if(property.deposit_amount<=customer.budget_max){score+=35;reasons.push("\u0648\u062F\u06CC\u0639\u0647 \u062F\u0631 \u062A\u0648\u0627\u0646 \u0645\u0627\u0644\u06CC \u0645\u062A\u0642\u0627\u0636\u06CC")}}if(customer.preferred_area_text&&property.address?.neighborhood){if(customer.preferred_area_text.includes(property.address.neighborhood)){score+=25;reasons.push(`\u0645\u062D\u0644\u0647 \u0645\u0648\u0631\u062F \u0639\u0644\u0627\u0642\u0647 (${property.address.neighborhood})`)}}if(property.has_parking&&property.has_elevator){score+=10;reasons.push("\u062F\u0627\u0631\u0627\u06CC \u067E\u0627\u0631\u06A9\u06CC\u0646\u06AF \u0648 \u0622\u0633\u0627\u0646\u0633\u0648\u0631")}if(score>=60){matches.push({property,customer,matchScore:score,matchReasons:reasons})}}}return matches.slice(0,5)}async getCustomerMatches(tenantId,customerId){const customer=await this.getCustomerById(tenantId,customerId);if(!customer)return[];const requirements=await this.getCustomerRequirements(tenantId,customerId);const properties=await this.getProperties(tenantId);const activeProperties=properties.filter(p=>!p.is_archived&&p.status==="AVAILABLE");const results=[];for(const property of activeProperties){let score=0;const reasons=[];if(requirements.length>0){for(const req of requirements){if(!req.is_active)continue;let reqScore=0;const reqReasons=[];if(req.listing_type===property.listing_type){reqScore+=25;reqReasons.push(req.listing_type==="SALE"?"\u0645\u0639\u0627\u0645\u0644\u0647 \u0641\u0631\u0648\u0634":"\u0631\u0647\u0646 \u0648 \u0627\u062C\u0627\u0631\u0647")}if(req.property_type===property.property_type){reqScore+=20;reqReasons.push("\u0646\u0648\u0639 \u06A9\u0627\u0631\u0628\u0631\u06CC \u0648 \u0645\u0644\u06A9")}if(req.max_budget){const propPrice=property.listing_type==="SALE"?property.price_total:property.deposit_amount;if(propPrice&&propPrice<=req.max_budget){reqScore+=25;reqReasons.push("\u0628\u0648\u062F\u062C\u0647 \u0645\u062A\u0646\u0627\u0633\u0628")}}if(req.min_area&&property.area_sqm>=req.min_area){reqScore+=15;reqReasons.push("\u0645\u062A\u0631\u0627\u0698 \u0645\u0637\u0644\u0648\u0628")}if(req.needs_parking&&property.has_parking){reqScore+=5;reqReasons.push("\u062F\u0627\u0631\u0627\u06CC \u067E\u0627\u0631\u06A9\u06CC\u0646\u06AF")}if(req.needs_elevator&&property.has_elevator){reqScore+=5;reqReasons.push("\u062F\u0627\u0631\u0627\u06CC \u0622\u0633\u0627\u0646\u0633\u0648\u0631")}if(req.needs_storage&&property.has_storage){reqScore+=5;reqReasons.push("\u062F\u0627\u0631\u0627\u06CC \u0627\u0646\u0628\u0627\u0631\u06CC")}if(req.needs_balcony&&property.has_balcony){reqScore+=5;reqReasons.push("\u062F\u0627\u0631\u0627\u06CC \u0628\u0627\u0644\u06A9\u0646")}if(reqScore>score){score=reqScore;reasons.splice(0,reasons.length,...reqReasons)}}}else{if(customer.customer_type==="BUYER"&&property.listing_type==="SALE"){score+=30;reasons.push("\u062A\u0637\u0627\u0628\u0642 \u062E\u0631\u06CC\u062F\u0627\u0631 \u0628\u0627 \u0641\u0631\u0648\u0634")}else if(customer.customer_type==="TENANT"&&property.listing_type==="RENT"){score+=30;reasons.push("\u062A\u0637\u0627\u0628\u0642 \u0645\u0633\u062A\u0623\u062C\u0631 \u0628\u0627 \u0631\u0647\u0646/\u0627\u062C\u0627\u0631\u0647")}if(customer.budget_max){const propPrice=property.listing_type==="SALE"?property.price_total:property.deposit_amount;if(propPrice&&propPrice<=customer.budget_max){score+=35;reasons.push("\u062F\u0631 \u0645\u062D\u062F\u0648\u062F\u0647 \u0628\u0648\u062F\u062C\u0647 \u0645\u062A\u0642\u0627\u0636\u06CC")}}if(customer.preferred_area_text&&property.address?.neighborhood){if(customer.preferred_area_text.includes(property.address.neighborhood)){score+=25;reasons.push(`\u0645\u062D\u0644\u0647 \u0627\u0646\u062A\u062E\u0627\u0628\u06CC (${property.address.neighborhood})`)}}if(property.has_parking&&property.has_elevator){score+=10;reasons.push("\u0627\u0645\u06A9\u0627\u0646\u0627\u062A \u06A9\u0627\u0645\u0644 (\u067E\u0627\u0631\u06A9\u06CC\u0646\u06AF \u0648 \u0622\u0633\u0627\u0646\u0633\u0648\u0631)")}}if(score>=40){results.push({property,score,reasons})}}return results.sort((a,b)=>b.score-a.score)}async getPropertyMatches(tenantId,propertyId){const property=await this.getPropertyById(tenantId,propertyId);if(!property)return[];const customers=await this.getCustomers(tenantId);const activeCustomers=customers.filter(c=>!c.is_archived);const results=[];for(const customer of activeCustomers){let score=0;const reasons=[];if(customer.customer_type==="BUYER"&&property.listing_type==="SALE"){score+=30;reasons.push("\u062A\u0637\u0627\u0628\u0642 \u0646\u0648\u0639 \u0645\u0639\u0627\u0645\u0644\u0647 (\u0641\u0631\u0648\u0634)")}else if(customer.customer_type==="TENANT"&&property.listing_type==="RENT"){score+=30;reasons.push("\u062A\u0637\u0627\u0628\u0642 \u0631\u0647\u0646 \u0648 \u0627\u062C\u0627\u0631\u0647")}if(customer.budget_max){const propPrice=property.listing_type==="SALE"?property.price_total:property.deposit_amount;if(propPrice&&propPrice<=customer.budget_max){score+=35;reasons.push("\u062F\u0631 \u0645\u062D\u062F\u0648\u062F\u0647 \u0628\u0648\u062F\u062C\u0647")}}if(customer.preferred_area_text&&property.address?.neighborhood){if(customer.preferred_area_text.includes(property.address.neighborhood)){score+=25;reasons.push(`\u0645\u062D\u0644\u0647 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 (${property.address.neighborhood})`)}}if(property.has_parking&&property.has_elevator){score+=10;reasons.push("\u062F\u0627\u0631\u0627\u06CC \u067E\u0627\u0631\u06A9\u06CC\u0646\u06AF \u0648 \u0622\u0633\u0627\u0646\u0633\u0648\u0631")}if(score>=40){results.push({customer,score,reasons})}}return results.sort((a,b)=>b.score-a.score)}async search(tenantId, rawQuery, requestingUser) {
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,[crypto.randomUUID(),tenantId,userId,action,entityType,entityId,metadata?JSON.stringify(metadata):null])}catch{}}async getRecentActivities(tenantId,limit=8){await this.init();const res=await this.pg.query(`SELECT * FROM audit_logs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2`,[tenantId,limit]);return res.rows.map(row=>{let title="\u0641\u0639\u0627\u0644\u06CC\u062A \u062F\u0631 \u0633\u06CC\u0633\u062A\u0645";let description=`\u0639\u0645\u0644\u06CC\u0627\u062A ${row.action} \u0627\u0646\u062C\u0627\u0645 \u0634\u062F`;if(row.action==="PROPERTY_CREATED"){title="\u062B\u0628\u062A \u0645\u0644\u06A9 \u062C\u062F\u06CC\u062F";description="\u0641\u0627\u06CC\u0644 \u062C\u062F\u06CC\u062F \u062F\u0631 \u0633\u06CC\u0633\u062A\u0645 \u062B\u0628\u062A \u0648 \u0622\u0645\u0627\u062F\u0647 \u0628\u0627\u0632\u062F\u06CC\u062F \u0634\u062F"}else if(row.action==="CUSTOMER_CREATED"){title="\u062B\u0628\u062A \u0645\u062A\u0642\u0627\u0636\u06CC \u062C\u062F\u06CC\u062F";description="\u0627\u0637\u0644\u0627\u0639\u0627\u062A \u0645\u0634\u062A\u0631\u06CC \u0648 \u0645\u062D\u062F\u0648\u062F\u0647 \u0646\u06CC\u0627\u0632\u0645\u0646\u062F\u06CC \u062F\u0631 \u0633\u0627\u0645\u0627\u0646\u0647 \u0630\u062E\u06CC\u0631\u0647 \u06AF\u0631\u062F\u06CC\u062F"}else if(row.action==="TASK_COMPLETED"){title="\u062A\u06A9\u0645\u06CC\u0644 \u067E\u06CC\u06AF\u06CC\u0631\u06CC";description="\u0648\u0638\u06CC\u0641\u0647 \u067E\u06CC\u06AF\u06CC\u0631\u06CC \u0628\u0627 \u0645\u0648\u0641\u0642\u06CC\u062A \u0627\u0646\u062C\u0627\u0645 \u0648 \u0628\u0647 \u0633\u0648\u0627\u0628\u0642 \u0645\u0646\u062A\u0642\u0644 \u06AF\u0631\u062F\u06CC\u062F"}else if(row.action==="TASK_CREATED"){title="\u062B\u0628\u062A \u067E\u06CC\u06AF\u06CC\u0631\u06CC \u062C\u062F\u06CC\u062F";description="\u0645\u0648\u0639\u062F \u062A\u0645\u0627\u0633 \u0648 \u0627\u0642\u062F\u0627\u0645 \u062C\u062F\u06CC\u062F \u0628\u0631\u0627\u06CC \u0645\u0634\u062A\u0631\u06CC \u062A\u0646\u0638\u06CC\u0645 \u0634\u062F"}else if(row.action==="OWNER_CREATED"){title="\u062B\u0628\u062A \u0645\u0627\u0644\u06A9 \u062C\u062F\u06CC\u062F";description="\u0645\u0634\u062E\u0635\u0627\u062A \u0645\u0627\u0644\u06A9 \u0648 \u0627\u0633\u0646\u0627\u062F \u062F\u0631 \u0633\u06CC\u0633\u062A\u0645 \u0630\u062E\u06CC\u0631\u0647 \u06AF\u0631\u062F\u06CC\u062F"}else if(row.action==="SYSTEM_BOOT"){title="\u0631\u0627\u0647\u200C\u0627\u0646\u062F\u0627\u0632\u06CC \u0633\u0627\u0645\u0627\u0646\u0647 \u0627\u0645\u0644\u0627\u06A9";description="\u0622\u0698\u0627\u0646\u0633 \u0641\u0639\u0627\u0644 \u0648 \u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u06CC \u067E\u0627\u06CC\u0647 \u0628\u0627\u0631\u06AF\u0630\u0627\u0631\u06CC \u0634\u062F\u0646\u062F"}return{id:row.id,action:row.action,title,description,created_at:row.created_at,entity_type:row.entity_type,entity_id:row.entity_id||void 0}})}
+  evaluateTransactionMatch(customerType, listingType, explicitReqListingType = null) {
+    const reqLt = explicitReqListingType ? String(explicitReqListingType).toUpperCase() : null;
+    const propLt = String(listingType || "").toUpperCase();
+    if (reqLt) {
+      if (reqLt === propLt) {
+        return { compatible: true, score: 30, reason: propLt === "RENT" ? "تطابق رهن و اجاره" : "تطابق نوع معامله" };
+      }
+      if ((reqLt === "SALE" && propLt === "PRE_SALE") || (reqLt === "PRE_SALE" && propLt === "SALE")) {
+        return { compatible: true, score: 25, reason: "معامله خرید / پیش‌فروش" };
+      }
+      return { compatible: false, score: 0, reason: null };
+    }
+    const ct = String(customerType || "BUYER").toUpperCase();
+    if (ct === "BUYER") {
+      if (propLt === "SALE" || propLt === "PRE_SALE") {
+        return { compatible: true, score: 30, reason: propLt === "SALE" ? "تطابق نوع معامله (فروش)" : "تطابق پیش‌فروش" };
+      }
+      return { compatible: false, score: 0, reason: null };
+    }
+    if (ct === "INVESTOR") {
+      if (propLt === "SALE" || propLt === "PRE_SALE" || propLt === "EXCHANGE") {
+        return { compatible: true, score: 30, reason: "مناسب سرمایه‌گذاری" };
+      }
+      return { compatible: false, score: 0, reason: null };
+    }
+    if (ct === "TENANT") {
+      if (propLt === "RENT") {
+        return { compatible: true, score: 30, reason: "تطابق رهن و اجاره" };
+      }
+      return { compatible: false, score: 0, reason: null };
+    }
+    return { compatible: false, score: 0, reason: null };
+  }
+  evaluateBudgetMatch(propPriceRaw, minBudgetRaw, maxBudgetRaw) {
+    let minB = minBudgetRaw ? Number(minBudgetRaw) : 0;
+    let maxB = maxBudgetRaw ? Number(maxBudgetRaw) : 0;
+    const propPrice = propPriceRaw ? Number(propPriceRaw) : 0;
+    if (minB > 0 && maxB > 0 && minB > maxB) {
+      [minB, maxB] = [maxB, minB];
+    }
+    if (minB <= 0 && maxB <= 0) {
+      return { ok: true, score: 0, reason: null };
+    }
+    if (propPrice <= 0) {
+      return { ok: true, score: 0, reason: null };
+    }
+    if (minB > 0 && maxB > 0) {
+      if (propPrice >= minB && propPrice <= maxB) {
+        return { ok: true, score: 40, reason: "دقیقاً در بازه بودجه متقاضی" };
+      }
+      if (propPrice >= minB * 0.9 && propPrice <= maxB * 1.1) {
+        return { ok: true, score: 25, reason: "نزدیک به بازه بودجه متقاضی" };
+      }
+      return { ok: false, score: 0, reason: null };
+    }
+    if (maxB > 0) {
+      if (propPrice <= maxB) {
+        return { ok: true, score: 35, reason: "در محدوده سقف بودجه متقاضی" };
+      }
+      if (propPrice <= maxB * 1.1) {
+        return { ok: true, score: 20, reason: "نزدیک به سقف بودجه متقاضی" };
+      }
+      return { ok: false, score: 0, reason: null };
+    }
+    if (propPrice >= minB) {
+      return { ok: true, score: 35, reason: "متناسب با حداقل بودجه متقاضی" };
+    }
+    if (propPrice >= minB * 0.9) {
+      return { ok: true, score: 20, reason: "نزدیک به حداقل بودجه متقاضی" };
+    }
+    return { ok: false, score: 0, reason: null };
+  }
+  scoreCustomerAgainstProperty(customer, property, requirements = []) {
+    const isRent = property.listing_type === "RENT";
+    const propPrice = isRent ? (property.deposit_amount ?? property.rent_amount) : property.price_total;
+    const activeReqs = (requirements || []).filter((r) => r && r.is_active !== false);
+    const propLocationTokens = [property.address?.neighborhood, property.address?.district].filter(Boolean);
+
+    if (activeReqs.length > 0) {
+      let bestScore = 0;
+      let bestReasons = [];
+      for (const req of activeReqs) {
+        const tx = this.evaluateTransactionMatch(customer.customer_type, property.listing_type, req.listing_type || null);
+        if (!tx.compatible) continue;
+        const budgetEval = this.evaluateBudgetMatch(
+          propPrice,
+          req.min_budget ?? customer.budget_min,
+          req.max_budget ?? customer.budget_max,
+        );
+        if (!budgetEval.ok) continue;
+        let reqScore = tx.score + budgetEval.score;
+        const reqReasons = [tx.reason, budgetEval.reason].filter(Boolean);
+        if (req.property_type && req.property_type === property.property_type) {
+          reqScore += 20;
+          reqReasons.push("تطابق نوع ملک");
+        }
+        if (req.min_area && property.area_sqm >= Number(req.min_area)) {
+          if (!req.max_area || property.area_sqm <= Number(req.max_area)) {
+            reqScore += 15;
+            reqReasons.push("متراژ مطلوب");
+          }
+        }
+        const areaText = [
+          ...(Array.isArray(req.preferred_neighborhoods) ? req.preferred_neighborhoods : []),
+          customer.preferred_area_text || "",
+        ].join(" ");
+        const matchedNeighborhood = propLocationTokens.find((loc) => areaText.includes(loc));
+        if (matchedNeighborhood) {
+          reqScore += 20;
+          reqReasons.push(`محله مورد علاقه (${matchedNeighborhood})`);
+        }
+        if (req.needs_parking && property.has_parking) { reqScore += 5; reqReasons.push("دارای پارکینگ"); }
+        if (req.needs_elevator && property.has_elevator) { reqScore += 5; reqReasons.push("دارای آسانسور"); }
+        if (req.needs_storage && property.has_storage) { reqScore += 5; reqReasons.push("دارای انباری"); }
+        if (req.needs_balcony && property.has_balcony) { reqScore += 5; reqReasons.push("دارای بالکن"); }
+        if (reqScore > bestScore) {
+          bestScore = reqScore;
+          bestReasons = reqReasons;
+        }
+      }
+      return { score: bestScore, reasons: bestReasons };
+    }
+
+    const tx = this.evaluateTransactionMatch(customer.customer_type, property.listing_type, null);
+    if (!tx.compatible) return { score: 0, reasons: [] };
+    const budgetEval = this.evaluateBudgetMatch(propPrice, customer.budget_min, customer.budget_max);
+    if (!budgetEval.ok) return { score: 0, reasons: [] };
+
+    let score = tx.score + budgetEval.score;
+    const reasons = [tx.reason, budgetEval.reason].filter(Boolean);
+
+    if (customer.preferred_area_text) {
+      const matchedNeighborhood = propLocationTokens.find((loc) => customer.preferred_area_text.includes(loc));
+      if (matchedNeighborhood) {
+        score += 25;
+        reasons.push(`محله مورد علاقه (${matchedNeighborhood})`);
+      }
+    }
+    if (property.has_parking && property.has_elevator) {
+      score += 10;
+      reasons.push("دارای پارکینگ و آسانسور");
+    }
+    return { score, reasons };
+  }
+  async calculateSmartMatches(tenantId, requestingUser = null) {
+    const [properties, customers, reqRes] = await Promise.all([
+      this.getProperties(tenantId, { status: "ALL" }, requestingUser),
+      this.getCustomers(tenantId, {}, requestingUser),
+      this.pg.query(`SELECT * FROM customer_requirements WHERE tenant_id = $1 AND is_active = true`, [tenantId]),
+    ]);
+    const activeProperties = properties.filter(
+      (p) => !p.is_archived && ["ACTIVE", "AVAILABLE", "NEGOTIATION", "UNDER_NEGOTIATION"].includes(p.status),
+    );
+    const activeCustomers = customers.filter((c) => !c.is_archived);
+    const reqByCustomer = new Map();
+    for (const r of reqRes.rows) {
+      const list = reqByCustomer.get(r.customer_id) || [];
+      list.push({
+        ...r,
+        min_budget: r.min_budget ? Number(r.min_budget) : void 0,
+        max_budget: r.max_budget ? Number(r.max_budget) : void 0,
+        min_area: r.min_area ? Number(r.min_area) : void 0,
+        max_area: r.max_area ? Number(r.max_area) : void 0,
+      });
+      reqByCustomer.set(r.customer_id, list);
+    }
+    const matches = [];
+    for (const customer of activeCustomers) {
+      const reqs = reqByCustomer.get(customer.id) || [];
+      for (const property of activeProperties) {
+        const { score, reasons } = this.scoreCustomerAgainstProperty(customer, property, reqs);
+        if (score >= 60) {
+          matches.push({ property, customer, matchScore: score, matchReasons: reasons });
+        }
+      }
+    }
+    return matches.sort((a, b) => b.matchScore - a.matchScore).slice(0, 5);
+  }
+  async getCustomerMatches(tenantId, customerId, requestingUser = null) {
+    const customer = await this.getCustomerById(tenantId, customerId, requestingUser);
+    if (!customer) return [];
+    const [requirements, properties] = await Promise.all([
+      this.getCustomerRequirements(tenantId, customerId),
+      this.getProperties(tenantId, { status: "ALL" }, requestingUser),
+    ]);
+    const activeProperties = properties.filter(
+      (p) => !p.is_archived && ["ACTIVE", "AVAILABLE", "NEGOTIATION", "UNDER_NEGOTIATION"].includes(p.status),
+    );
+    const results = [];
+    for (const property of activeProperties) {
+      const { score, reasons } = this.scoreCustomerAgainstProperty(customer, property, requirements);
+      if (score >= 40) {
+        results.push({ property, score, reasons });
+      }
+    }
+    return results.sort((a, b) => b.score - a.score);
+  }
+  async getPropertyMatches(tenantId, propertyId, requestingUser = null) {
+    const property = await this.getPropertyById(tenantId, propertyId, requestingUser);
+    if (!property || property.is_archived) return [];
+    const [customers, reqRes] = await Promise.all([
+      this.getCustomers(tenantId, {}, requestingUser),
+      this.pg.query(`SELECT * FROM customer_requirements WHERE tenant_id = $1 AND is_active = true`, [tenantId]),
+    ]);
+    const reqByCustomer = new Map();
+    for (const r of reqRes.rows) {
+      const list = reqByCustomer.get(r.customer_id) || [];
+      list.push({
+        ...r,
+        min_budget: r.min_budget ? Number(r.min_budget) : void 0,
+        max_budget: r.max_budget ? Number(r.max_budget) : void 0,
+        min_area: r.min_area ? Number(r.min_area) : void 0,
+        max_area: r.max_area ? Number(r.max_area) : void 0,
+      });
+      reqByCustomer.set(r.customer_id, list);
+    }
+    const activeCustomers = customers.filter((c) => !c.is_archived);
+    const results = [];
+    for (const customer of activeCustomers) {
+      const reqs = reqByCustomer.get(customer.id) || [];
+      const { score, reasons } = this.scoreCustomerAgainstProperty(customer, property, reqs);
+      if (score >= 40) {
+        results.push({ customer, score, reasons });
+      }
+    }
+    return results.sort((a, b) => b.score - a.score);
+  }async search(tenantId, rawQuery, requestingUser) {
     await this.init();
     const query = normalizeDigits(rawQuery.trim());
     const searchPattern = `%${query}%`;
@@ -1251,7 +1795,7 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
              OR c.notes ILIKE $2
            )
          ORDER BY c.created_at DESC 
-         LIMIT 20`,custParams)]);return{properties:propRes.rows.map(this.mapPropertyRow),customers:custRes.rows.map(this.mapCustomerRow)}}mapPropertyRow(row){return{id:row.id,tenant_id:row.tenant_id,branch_id:row.branch_id,branch_name:row.branch_name,code:row.code,title:row.title,property_type:row.property_type,listing_type:row.listing_type,status:row.status,price_total:row.price_total?Number(row.price_total):void 0,price_per_meter:row.price_per_meter?Number(row.price_per_meter):void 0,rent_amount:row.rent_amount?Number(row.rent_amount):void 0,deposit_amount:row.deposit_amount?Number(row.deposit_amount):void 0,area_sqm:Number(row.area_sqm),bedrooms:row.bedrooms,floor:row.floor,year_built:row.year_built,has_parking:Boolean(row.has_parking),has_storage:Boolean(row.has_storage),has_elevator:Boolean(row.has_elevator),has_balcony:Boolean(row.has_balcony),description:row.description,address:{province:row.province||"\u062A\u0647\u0631\u0627\u0646",city:row.city||"\u062A\u0647\u0631\u0627\u0646",district:row.district||row.neighborhood,neighborhood:row.neighborhood||row.district,street:row.street,location_precision:row.location_precision||"APPROXIMATE"},visibility:row.visibility||"AGENCY",assigned_agent_id:row.assigned_agent_id,assigned_to_user_id:row.assigned_agent_id,assigned_agent_name:row.assigned_agent_name||void 0,created_by_user_id:row.created_by_user_id,created_by_name:row.created_by_name||void 0,cover_image:row.cover_image,is_archived:Boolean(row.is_archived),archived_at:row.archived_at,created_at:row.created_at,updated_at:row.updated_at}}mapCustomerRow(row){return{id:row.id,tenant_id:row.tenant_id,branch_id:row.branch_id,branch_name:row.branch_name,code:row.code||void 0,first_name:row.first_name,last_name:row.last_name,display_name:row.display_name,phone:row.phone,secondary_phone:row.secondary_phone,email:row.email,customer_type:row.customer_type,lead_status:row.lead_status,temperature:row.temperature,lead_source:row.lead_source||"IN_PERSON",budget_min:row.budget_min?Number(row.budget_min):void 0,budget_max:row.budget_max?Number(row.budget_max):void 0,preferred_city:row.preferred_city,preferred_area_text:row.preferred_area_text,notes:row.notes,visibility:row.visibility||"AGENCY",assigned_agent_id:row.assigned_agent_id,assigned_to_user_id:row.assigned_agent_id,assigned_agent_name:row.assigned_agent_name||void 0,created_by_user_id:row.created_by_user_id,created_by_name:row.created_by_name||void 0,is_archived:Boolean(row.is_archived),archived_at:row.archived_at,next_follow_up_at:row.next_follow_up_at||void 0,created_at:row.created_at,updated_at:row.updated_at,last_interaction_at:row.last_interaction_at}}mapTaskRow(row){return{id:row.id,tenant_id:row.tenant_id,branch_id:row.branch_id,branch_name:row.branch_name,assigned_user_id:row.assigned_user_id,customer_id:row.customer_id,customer_name:row.customer_name,customer_phone:row.customer_phone,property_id:row.property_id,property_title:row.property_title,property_code:row.property_code,title:row.title,description:row.description,due_at:row.due_at,completed_at:row.completed_at,priority:row.priority,status:row.status,created_at:row.created_at,type:row.type||"FOLLOW_UP",end_at:row.end_at,visit_result:row.visit_result}}async resetAgentPassword(tenantId,actorUserId,agentId,newPassword){await this.init();const agent=await this.getUserById(agentId);if(!agent||agent.tenant_id!==tenantId){const err=new Error("\u0645\u0634\u0627\u0648\u0631 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="AGENT_NOT_FOUND";throw err}const passwordHash=bcrypt.hashSync(newPassword,10);await this.pg.query(`UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND tenant_id = $3`,[passwordHash,agentId,tenantId]);await this.pg.query(`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND tenant_id = $2 AND revoked_at IS NULL`,[agentId,tenantId]);await this.addAuditLog(tenantId,actorUserId,"AGENT_PASSWORD_RESET","USER",agentId)}async getAgentWorkload(tenantId,agentId){await this.init();const agent=await this.getAgentById(tenantId,agentId);if(!agent){const err=new Error("\u0645\u0634\u0627\u0648\u0631 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="AGENT_NOT_FOUND";throw err}const propRes=await this.pg.query(`SELECT p.*,
+         LIMIT 20`,custParams)]);return{properties:propRes.rows.map(this.mapPropertyRow),customers:custRes.rows.map(this.mapCustomerRow)}}mapPropertyRow(row){return{id:row.id,tenant_id:row.tenant_id,branch_id:row.branch_id,branch_name:row.branch_name,code:row.code,title:row.title,property_type:row.property_type,listing_type:row.listing_type,status:row.status,price_total:row.price_total?Number(row.price_total):void 0,price_per_meter:row.price_per_meter?Number(row.price_per_meter):void 0,rent_amount:row.rent_amount?Number(row.rent_amount):void 0,deposit_amount:row.deposit_amount?Number(row.deposit_amount):void 0,area_sqm:Number(row.area_sqm),bedrooms:row.bedrooms,floor:row.floor,year_built:row.year_built,has_parking:Boolean(row.has_parking),has_storage:Boolean(row.has_storage),has_elevator:Boolean(row.has_elevator),has_balcony:Boolean(row.has_balcony),description:row.description,address:{province:row.province||"",city:row.city||"",district:row.district||row.neighborhood||null,neighborhood:row.neighborhood||row.district||null,street:row.street,location_precision:row.location_precision||"APPROXIMATE"},visibility:row.visibility||"AGENCY",assigned_agent_id:row.assigned_agent_id,assigned_to_user_id:row.assigned_agent_id,assigned_agent_name:row.assigned_agent_name||void 0,created_by_user_id:row.created_by_user_id,created_by_name:row.created_by_name||void 0,cover_image:row.cover_image,is_archived:Boolean(row.is_archived),archived_at:row.archived_at,created_at:row.created_at,updated_at:row.updated_at}}mapCustomerRow(row){return{id:row.id,tenant_id:row.tenant_id,branch_id:row.branch_id,branch_name:row.branch_name,code:row.code||void 0,first_name:row.first_name,last_name:row.last_name,display_name:row.display_name,phone:row.phone,secondary_phone:row.secondary_phone,email:row.email,customer_type:row.customer_type,lead_status:row.lead_status,temperature:row.temperature,lead_source:row.lead_source||"IN_PERSON",budget_min:row.budget_min?Number(row.budget_min):void 0,budget_max:row.budget_max?Number(row.budget_max):void 0,preferred_city:row.preferred_city,preferred_area_text:row.preferred_area_text,notes:row.notes,visibility:row.visibility||"AGENCY",assigned_agent_id:row.assigned_agent_id,assigned_to_user_id:row.assigned_agent_id,assigned_agent_name:row.assigned_agent_name||void 0,created_by_user_id:row.created_by_user_id,created_by_name:row.created_by_name||void 0,is_archived:Boolean(row.is_archived),archived_at:row.archived_at,next_follow_up_at:row.next_follow_up_at||void 0,created_at:row.created_at,updated_at:row.updated_at,last_interaction_at:row.last_interaction_at}}mapTaskRow(row){return{id:row.id,tenant_id:row.tenant_id,branch_id:row.branch_id,branch_name:row.branch_name,assigned_user_id:row.assigned_user_id,assigned_to_user_id:row.assigned_user_id,customer_id:row.customer_id,customer_name:row.customer_name,customer_phone:row.customer_phone,property_id:row.property_id,property_title:row.property_title,property_code:row.property_code,title:row.title,description:row.description,due_at:row.due_at,completed_at:row.completed_at,priority:row.priority,status:row.status,created_at:row.created_at,updated_at:row.updated_at,type:row.type||"FOLLOW_UP",end_at:row.end_at,visit_result:row.visit_result}}async resetAgentPassword(tenantId,actorUserId,agentId,newPassword){await this.init();const agent=await this.getUserById(agentId);if(!agent||agent.tenant_id!==tenantId){const err=new Error("\u0645\u0634\u0627\u0648\u0631 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="AGENT_NOT_FOUND";throw err}const passwordHash=bcrypt.hashSync(newPassword,10);await this.pg.query(`UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND tenant_id = $3`,[passwordHash,agentId,tenantId]);await this.pg.query(`UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND tenant_id = $2 AND revoked_at IS NULL`,[agentId,tenantId]);await this.addAuditLog(tenantId,actorUserId,"AGENT_PASSWORD_RESET","USER",agentId)}async getAgentWorkload(tenantId,agentId){await this.init();const agent=await this.getAgentById(tenantId,agentId);if(!agent){const err=new Error("\u0645\u0634\u0627\u0648\u0631 \u0645\u0648\u0631\u062F \u0646\u0638\u0631 \u062F\u0631 \u0627\u06CC\u0646 \u0622\u0698\u0627\u0646\u0633 \u06CC\u0627\u0641\u062A \u0646\u0634\u062F.");err.status=404;err.code="AGENT_NOT_FOUND";throw err}const propRes=await this.pg.query(`SELECT p.*,
               (SELECT file_url FROM property_media pm WHERE pm.property_id = p.id AND pm.is_cover = true LIMIT 1) as cover_image,
               u_creator.display_name as created_by_name,
               u_assignee.display_name as assigned_agent_name
@@ -1589,7 +2133,7 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
       SELECT
         (SELECT COUNT(*)::int FROM branches WHERE tenant_id = $1 AND status = 'ACTIVE') as active_branches,
         (SELECT COUNT(*)::int FROM users WHERE tenant_id = $1 AND is_active = true) as active_agents
-    `,[tenantId]);const activeBranches=Number(countsRes.rows[0]?.active_branches||1);const activeAgents=Number(countsRes.rows[0]?.active_agents||1);const now=new Date;const expiresAt=t.subscription_expires_at?new Date(t.subscription_expires_at):new Date(now.getTime()+30*864e5);const msDiff=expiresAt.getTime()-now.getTime();const daysRemaining=Math.max(0,Math.ceil(msDiff/(1e3*60*60*24)));let status=t.subscription_status||"ACTIVE";if(daysRemaining<=0){status="EXPIRED"}const planCode=t.plan_code||"ENTERPRISE_PRO";const planDetails={FREE_TRIAL:{title:"\u0622\u0632\u0645\u0627\u06CC\u0634\u06CC \u0631\u0627\u06CC\u06AF\u0627\u0646",price:0,description:"\u062F\u0648\u0631\u0647 \u0622\u0632\u0645\u0627\u06CC\u0634\u06CC \u06F1\u06F4 \u0631\u0648\u0632\u0647 \u0628\u0631\u0627\u06CC \u062A\u0633\u062A \u0627\u0645\u06A9\u0627\u0646\u0627\u062A \u0633\u0627\u0645\u0627\u0646\u0647"},STARTER:{title:"\u067E\u0644\u0646 \u067E\u0627\u06CC\u0647 (\u062A\u06A9 \u0634\u0639\u0628\u0647)",price:12e6,description:"\u0645\u0646\u0627\u0633\u0628 \u062F\u0641\u0627\u062A\u0631 \u0646\u0648\u067E\u0627 \u0628\u0627 \u06F1 \u0634\u0639\u0628\u0647 \u0648 \u062D\u062F\u0627\u06A9\u062B\u0631 \u06F5 \u0645\u0634\u0627\u0648\u0631"},PROFESSIONAL:{title:"\u067E\u0644\u0646 \u062D\u0631\u0641\u0647\u200C\u0627\u06CC (\u06F3 \u0634\u0639\u0628\u0647)",price:28e6,description:"\u0645\u0646\u0627\u0633\u0628 \u062F\u0641\u0627\u062A\u0631 \u062F\u0631 \u062D\u0627\u0644 \u062A\u0648\u0633\u0639\u0647 \u0628\u0627 \u06F3 \u0634\u0639\u0628\u0647 \u0648 \u06F1\u06F5 \u0645\u0634\u0627\u0648\u0631"},ENTERPRISE_PRO:{title:"\u067E\u0644\u0646 \u0633\u0627\u0632\u0645\u0627\u0646\u06CC \u067E\u06CC\u0634\u0631\u0641\u062A\u0647 (\u0686\u0646\u062F\u0634\u0639\u0628\u0647\u200C\u0627\u06CC \u0646\u0627\u0645\u062D\u062F\u0648\u062F)",price:49e6,description:"\u062F\u0641\u0627\u062A\u0631 \u0628\u0632\u0631\u06AF \u0628\u0627 \u0634\u0639\u0628 \u0646\u0627\u0645\u062D\u062F\u0648\u062F\u060C \u0627\u0633\u0646\u0627\u062F \u0627\u0645\u0646 \u0648 \u0647\u0648\u0634 \u062A\u0637\u0628\u06CC\u0642"}};const currentPlanMeta=planDetails[planCode]||planDetails.ENTERPRISE_PRO;return{tenant_id:t.id,agency_code:t.agency_code,name:t.name,plan_code:planCode,plan_title:currentPlanMeta.title,plan_price:currentPlanMeta.price,subscription_status:status,subscription_start_at:t.subscription_start_at||t.created_at,subscription_expires_at:expiresAt.toISOString(),days_remaining:daysRemaining,is_expired:daysRemaining<=0,max_branches:Number(t.max_branches||10),max_agents:Number(t.max_agents||50),active_branches_count:activeBranches,active_agents_count:activeAgents,billing_cycle:t.billing_cycle||"ANNUAL",features:["\u0633\u06CC\u0633\u062A\u0645 \u0686\u0646\u062F\u0634\u0639\u0628\u0647\u200C\u0627\u06CC \u0648 \u062A\u0641\u06A9\u06CC\u06A9 \u062F\u0633\u062A\u0631\u0633\u06CC \u0645\u062F\u06CC\u0631\u0627\u0646 \u0634\u0639\u0628","\u0628\u0627\u06CC\u06AF\u0627\u0646\u06CC \u0627\u0645\u0646 \u0627\u0633\u0646\u0627\u062F \u0648 \u0642\u0631\u0627\u0631\u062F\u0627\u062F\u0647\u0627 \u0628\u0627 \u0627\u062D\u0631\u0627\u0632 \u0647\u0648\u06CC\u062A","\u0645\u0648\u062A\u0648\u0631 \u062A\u0637\u0628\u06CC\u0642 \u0647\u0648\u0634\u0645\u0646\u062F \u0644\u06CC\u062F\u0647\u0627 \u0628\u0627 \u0641\u0627\u06CC\u0644\u200C\u0647\u0627\u06CC \u0645\u0644\u06A9\u06CC (Smart Matching)","\u06AF\u0632\u0627\u0631\u0634\u200C\u06AF\u06CC\u0631\u06CC \u0639\u0645\u0644\u06A9\u0631\u062F \u0645\u0627\u0647\u0627\u0646\u0647 \u0645\u0634\u0627\u0648\u0631\u0627\u0646 \u0648 \u062D\u062C\u0645 \u0645\u0639\u0627\u0645\u0644\u0627\u062A","\u0627\u0634\u062A\u0631\u0627\u06A9\u200C\u06AF\u0630\u0627\u0631\u06CC \u0627\u0645\u0646 \u0641\u0627\u06CC\u0644 \u0645\u0644\u06A9\u06CC \u0628\u0627 \u062A\u0648\u06A9\u0646 \u0639\u0645\u0648\u0645\u06CC","\u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u06CC \u0641\u0646\u06CC \u0627\u062E\u062A\u0635\u0627\u0635\u06CC \u0648 \u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u200C\u06AF\u06CC\u0631\u06CC \u0627\u0628\u0631\u06CC \u062E\u0648\u062F\u06A9\u0627\u0631"],plans_catalog:[{code:"STARTER",title:"\u067E\u0644\u0646 \u067E\u0627\u06CC\u0647",price_annual:12e6,max_branches:1,max_agents:5,features:["\u06F1 \u0634\u0639\u0628\u0647 \u0641\u0639\u0627\u0644","\u06F5 \u0645\u0634\u0627\u0648\u0631 \u0641\u0639\u0627\u0644","\u062B\u0628\u062A \u0646\u0627\u0645\u062D\u062F\u0648\u062F \u0645\u0644\u06A9 \u0648 \u0645\u0634\u062A\u0631\u06CC","\u067E\u06CC\u06AF\u06CC\u0631\u06CC \u0648\u0638\u0627\u06CC\u0641"]},{code:"PROFESSIONAL",title:"\u067E\u0644\u0646 \u062D\u0631\u0641\u0647\u200C\u0627\u06CC",price_annual:28e6,max_branches:3,max_agents:15,features:["\u06F3 \u0634\u0639\u0628\u0647 \u0645\u0633\u062A\u0642\u0644","\u06F1\u06F5 \u0645\u0634\u0627\u0648\u0631 \u0641\u0639\u0627\u0644","\u0628\u0627\u06CC\u06AF\u0627\u0646\u06CC \u0627\u0633\u0646\u0627\u062F \u0642\u0631\u0627\u0631\u062F\u0627\u062F","\u0647\u0648\u0634 \u062A\u0637\u0628\u06CC\u0642 \u0645\u0644\u06A9"]},{code:"ENTERPRISE_PRO",title:"\u067E\u0644\u0646 \u0633\u0627\u0632\u0645\u0627\u0646\u06CC \u0646\u0627\u0645\u062D\u062F\u0648\u062F",price_annual:49e6,max_branches:10,max_agents:50,features:["\u06F1\u06F0 \u0634\u0639\u0628\u0647 \u0641\u0639\u0627\u0644","\u06F5\u06F0 \u0645\u0634\u0627\u0648\u0631 \u0641\u0639\u0627\u0644","\u06AF\u0632\u0627\u0631\u0634\u200C\u0647\u0627\u06CC \u067E\u06CC\u0634\u0631\u0641\u062A\u0647 \u0645\u062F\u06CC\u0631\u06CC\u062A\u06CC","\u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u06CC VIP"]}]}}async renewOrUpgradeSubscription(tenantId,actorUserId,data){await this.init();const durationMonths=Number(data.duration_months||12);const planCode=data.plan_code||"ENTERPRISE_PRO";let maxBranches=5;let maxAgents=20;if(planCode==="STARTER"){maxBranches=1;maxAgents=5}else if(planCode==="PROFESSIONAL"){maxBranches=3;maxAgents=15}else if(planCode==="ENTERPRISE_PRO"){maxBranches=10;maxAgents=50}const currentTenant=await this.pg.query(`SELECT subscription_expires_at FROM tenants WHERE id = $1`,[tenantId]);const currentExpiry=currentTenant.rows[0]?.subscription_expires_at?new Date(currentTenant.rows[0].subscription_expires_at):new Date;const baseDate=currentExpiry>new Date?currentExpiry:new Date;const newExpiry=new Date(baseDate.getTime()+durationMonths*30*864e5);await this.pg.query(`
+    `,[tenantId]);const activeBranches=Number(countsRes.rows[0]?.active_branches??1);const activeAgents=Number(countsRes.rows[0]?.active_agents??1);const now=new Date;const expiresAt=t.subscription_expires_at?new Date(t.subscription_expires_at):new Date(now.getTime()+30*864e5);const msDiff=expiresAt.getTime()-now.getTime();const daysRemaining=Math.max(0,Math.ceil(msDiff/(1e3*60*60*24)));let status=t.subscription_status||"ACTIVE";if(daysRemaining<=0){status="EXPIRED"}const planCode=t.plan_code||"ENTERPRISE_PRO";const currentPlanMeta=PLAN_DEFINITIONS[planCode]||PLAN_DEFINITIONS.ENTERPRISE_PRO;const{maxBranches,maxAgents}=resolveEffectivePlanLimits(planCode,t.max_branches,t.max_agents);return{tenant_id:t.id,agency_code:t.agency_code,name:t.name,plan_code:planCode,plan_title:currentPlanMeta.title,subscription_status:status,subscription_start_at:t.subscription_start_at||t.created_at,subscription_expires_at:expiresAt.toISOString(),days_remaining:daysRemaining,is_expired:daysRemaining<=0,max_branches:maxBranches,max_agents:maxAgents,active_branches_count:activeBranches,active_agents_count:activeAgents,billing_cycle:t.billing_cycle||"ANNUAL",features:[...UNIFIED_PLAN_FEATURES],plans_catalog:["STARTER","PROFESSIONAL","ENTERPRISE_PRO"].map(code=>{const meta=PLAN_DEFINITIONS[code];return{code:meta.code,title:meta.title,max_branches:meta.max_branches,max_agents:meta.max_agents,capacity_label:meta.capacity_label,description:meta.description,features:[...UNIFIED_PLAN_FEATURES]}})}}async renewOrUpgradeSubscription(tenantId,actorUserId,data){await this.init();const durationMonths=Number(data.duration_months||12);const planCode=data.plan_code||"ENTERPRISE_PRO";let maxBranches=10;let maxAgents=20;if(planCode==="STARTER"){maxBranches=1;maxAgents=3}else if(planCode==="PROFESSIONAL"){maxBranches=3;maxAgents=5}else if(planCode==="ENTERPRISE_PRO"){maxBranches=10;maxAgents=20}const currentTenant=await this.pg.query(`SELECT subscription_expires_at FROM tenants WHERE id = $1`,[tenantId]);const currentExpiry=currentTenant.rows[0]?.subscription_expires_at?new Date(currentTenant.rows[0].subscription_expires_at):new Date;const baseDate=currentExpiry>new Date?currentExpiry:new Date;const newExpiry=new Date(baseDate.getTime()+durationMonths*30*864e5);await this.pg.query(`
       UPDATE tenants
       SET plan_code = $1,
           subscription_status = 'ACTIVE',
@@ -1611,7 +2155,7 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
              (SELECT u.id FROM users u WHERE u.tenant_id = t.id AND u.role_code = 'ADMIN' ORDER BY u.created_at ASC LIMIT 1) as admin_user_id
       FROM tenants t
       ORDER BY t.created_at DESC
-    `);const now=new Date;return res.rows.map(r=>{const exp=r.subscription_expires_at?new Date(r.subscription_expires_at):null;const daysRemaining=exp?Math.max(0,Math.ceil((exp.getTime()-now.getTime())/(1e3*60*60*24))):0;return{id:r.id,agency_code:r.agency_code,name:r.name,slug:r.slug,phone:r.phone,email:r.email,address:r.address,status:r.status,plan_code:r.plan_code||"ENTERPRISE_PRO",subscription_status:r.subscription_status||"ACTIVE",subscription_expires_at:r.subscription_expires_at,days_remaining:daysRemaining,max_branches:Number(r.max_branches||5),max_agents:Number(r.max_agents||20),branches_count:Number(r.branches_count||0),agents_count:Number(r.agents_count||0),properties_count:Number(r.properties_count||0),transactions_count:Number(r.transactions_count||0),total_transaction_volume:Number(r.total_transaction_volume||0),admin_username:r.admin_username||null,admin_name:r.admin_name||null,admin_phone:r.admin_phone||null,admin_user_id:r.admin_user_id||null,created_at:r.created_at,updated_at:r.updated_at}})}async getPlatformOverviewMetrics(){await this.init();const res=await this.pg.query(`
+    `);const now=new Date;return res.rows.map(r=>{const exp=r.subscription_expires_at?new Date(r.subscription_expires_at):null;const daysRemaining=exp?Math.max(0,Math.ceil((exp.getTime()-now.getTime())/(1e3*60*60*24))):0;const{maxBranches,maxAgents}=resolveEffectivePlanLimits(r.plan_code||"ENTERPRISE_PRO",r.max_branches,r.max_agents);return{id:r.id,agency_code:r.agency_code,name:r.name,slug:r.slug,phone:r.phone,email:r.email,address:r.address,status:r.status,plan_code:r.plan_code||"ENTERPRISE_PRO",subscription_status:r.subscription_status||"ACTIVE",subscription_expires_at:r.subscription_expires_at,days_remaining:daysRemaining,max_branches:maxBranches,max_agents:maxAgents,branches_count:Number(r.branches_count||0),agents_count:Number(r.agents_count||0),properties_count:Number(r.properties_count||0),transactions_count:Number(r.transactions_count||0),total_transaction_volume:Number(r.total_transaction_volume||0),admin_username:r.admin_username||null,admin_name:r.admin_name||null,admin_phone:r.admin_phone||null,admin_user_id:r.admin_user_id||null,created_at:r.created_at,updated_at:r.updated_at}})}async getPlatformOverviewMetrics(){await this.init();const res=await this.pg.query(`
       SELECT
         (SELECT COUNT(*)::int FROM tenants) as total_tenants,
         (SELECT COUNT(*)::int FROM tenants WHERE status = 'ACTIVE' AND (subscription_expires_at IS NULL OR subscription_expires_at > CURRENT_TIMESTAMP)) as active_tenants,
@@ -1621,7 +2165,7 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
         (SELECT COUNT(*)::int FROM customers WHERE is_archived = false) as total_customers,
         (SELECT COUNT(*)::int FROM transactions WHERE status = 'COMPLETED') as total_transactions,
         (SELECT COALESCE(SUM(final_price), 0)::numeric FROM transactions WHERE status = 'COMPLETED') as total_transaction_volume
-    `);const row=res.rows[0];return{total_tenants:Number(row.total_tenants||0),active_tenants:Number(row.active_tenants||0),total_branches:Number(row.total_branches||0),total_agents:Number(row.total_agents||0),total_properties:Number(row.total_properties||0),total_customers:Number(row.total_customers||0),total_transactions:Number(row.total_transactions||0),total_transaction_volume:Number(row.total_transaction_volume||0)}}async createPlatformTenant(data,actorUserId){await this.init();const id=crypto.randomUUID();const cleanAgencyCode=data.agency_code.trim().toUpperCase();const slug=data.slug?.trim().toLowerCase()||cleanAgencyCode.toLowerCase();const planCode=data.plan_code||"ENTERPRISE_PRO";const trialDays=Number(data.trial_days||7);const expiresAt=new Date(Date.now()+trialDays*864e5).toISOString();let maxBranches=5;let maxAgents=20;if(planCode==="STARTER"){maxBranches=1;maxAgents=5}else if(planCode==="PROFESSIONAL"){maxBranches=3;maxAgents=15}else if(planCode==="ENTERPRISE_PRO"){maxBranches=10;maxAgents=50}await this.pg.query(`
+    `);const row=res.rows[0];return{total_tenants:Number(row.total_tenants||0),active_tenants:Number(row.active_tenants||0),total_branches:Number(row.total_branches||0),total_agents:Number(row.total_agents||0),total_properties:Number(row.total_properties||0),total_customers:Number(row.total_customers||0),total_transactions:Number(row.total_transactions||0),total_transaction_volume:Number(row.total_transaction_volume||0)}}async createPlatformTenant(data,actorUserId){await this.init();const id=crypto.randomUUID();const cleanAgencyCode=data.agency_code.trim().toUpperCase();const slug=data.slug?.trim().toLowerCase()||cleanAgencyCode.toLowerCase();const planCode=data.plan_code||"ENTERPRISE_PRO";const trialDays=Number(data.trial_days||7);const expiresAt=new Date(Date.now()+trialDays*864e5).toISOString();let maxBranches=10;let maxAgents=20;if(planCode==="STARTER"){maxBranches=1;maxAgents=3}else if(planCode==="PROFESSIONAL"){maxBranches=3;maxAgents=5}else if(planCode==="ENTERPRISE_PRO"){maxBranches=10;maxAgents=20}await this.pg.query(`
       INSERT INTO tenants (
         id, agency_code, name, slug, phone, email, address,
         timezone, locale, currency, status, plan_code,
@@ -1841,7 +2385,13 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
     await this.pg.query(`DELETE FROM audit_logs WHERE tenant_id = $1`, [tenantId]);
     await this.pg.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
 
-    console.log(`[Platform Admin] Tenant "${tenant.name}" (${tenant.agency_code}) and all related data completely deleted by actor ${actorUserId}`);
+    logger.info("Tenant and all related records deleted by platform admin", {
+      module: "platform",
+      operation: "platform_tenant_deleted",
+      userId: actorUserId || null,
+      tenantId,
+      details: { agencyCode: tenant.agency_code },
+    });
     return tenant;
   }async updatePlatformTenantSubscription(tenantId, data, actorUserId) {
     await this.init();
@@ -2108,7 +2658,13 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
           );
           inserted++;
         } catch (e) {
-          console.warn(`[Import Backup] Skipped row in ${tableName}:`, e.message);
+          logger.warn("Backup import skipped row", {
+            module: "backup",
+            operation: "backup_import_row_skipped",
+            tenantId: targetTenantId,
+            userId: actorUserId || null,
+            details: { tableName, error: e?.message },
+          });
         }
       }
       return inserted;
@@ -2345,11 +2901,634 @@ var __defProp=Object.defineProperty;var __name=(target,value)=>__defProp(target,
       await this.init();
       await this.pg.query(
         `INSERT INTO support_audit_logs (id, support_session_id, admin_id, tenant_id, action, resource_type, resource_id, details, ip_address)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [crypto.randomUUID(), sessionId, adminId, tenantId, action, resourceType, resourceId, details ? JSON.stringify(details) : null, ip]
       );
-    } catch (err) {
-      console.error("[SupportAudit] Failed to log:", err);
+    } catch (err: any) {
+      logger.error("Failed to insert support audit log", {
+        module: "platform",
+        operation: "support_audit_log_failed",
+        tenantId,
+        details: { action, error: err?.message },
+        stack: err?.stack || null,
+      });
     }
+  }
+
+  // --- Operational System Logs Persistence, Query & Retention ---
+  async insertSystemLog(entry: SystemLogRecord) {
+    if (!this.pg) return;
+    try {
+      await this.pg.query(
+        `INSERT INTO system_logs (
+           id, level, module, operation, message, request_id, method, route,
+           status, duration_ms, user_id, tenant_id, details, stack, created_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8,
+           $9, $10, $11, $12, $13::jsonb, $14, $15
+         ) ON CONFLICT (id) DO NOTHING`,
+        [
+          entry.id,
+          entry.level,
+          entry.module,
+          entry.operation,
+          entry.message,
+          entry.requestId,
+          entry.method,
+          entry.route,
+          entry.status,
+          entry.durationMs,
+          entry.userId,
+          entry.tenantId,
+          entry.details ? JSON.stringify(redactValue(entry.details)) : null,
+          entry.stack,
+          entry.timestamp,
+        ],
+      );
+    } catch {
+      // Never re-log or throw from DB log sink to avoid recursion
+    }
+  }
+
+  async getSystemLogs(filters: {
+    page?: number;
+    pageSize?: number;
+    level?: string;
+    module?: string;
+    search?: string;
+    from?: string;
+    to?: string;
+  } = {}) {
+    if (!this.pg) await this.init();
+    const page = Math.max(1, Number(filters.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(filters.pageSize) || 25));
+    const offset = (page - 1) * pageSize;
+
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    let idx = 1;
+
+    const level = filters.level?.trim().toUpperCase();
+    if (level && level !== "ALL" && ["ERROR", "WARN", "INFO", "DEBUG"].includes(level)) {
+      conditions.push(`level = $${idx++}`);
+      params.push(level);
+    }
+
+    const mod = filters.module?.trim();
+    if (mod && mod !== "ALL") {
+      conditions.push(`module = $${idx++}`);
+      params.push(mod);
+    }
+
+    const search = filters.search?.trim();
+    if (search) {
+      const likeParam = `%${search}%`;
+      conditions.push(
+        `(message ILIKE $${idx} OR COALESCE(request_id, '') ILIKE $${idx} OR COALESCE(route, '') ILIKE $${idx} OR COALESCE(operation, '') ILIKE $${idx})`,
+      );
+      params.push(likeParam);
+      idx++;
+    }
+
+    if (filters.from) {
+      const fromDate = new Date(filters.from);
+      if (Number.isFinite(fromDate.getTime())) {
+        conditions.push(`created_at >= $${idx++}`);
+        params.push(fromDate.toISOString());
+      }
+    }
+
+    if (filters.to) {
+      const toDate = new Date(filters.to);
+      if (Number.isFinite(toDate.getTime())) {
+        // If date-only YYYY-MM-DD, include entire end day
+        if (/^\d{4}-\d{2}-\d{2}$/.test(filters.to.trim())) {
+          toDate.setUTCHours(23, 59, 59, 999);
+        }
+        conditions.push(`created_at <= $${idx++}`);
+        params.push(toDate.toISOString());
+      }
+    }
+
+    const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const countRes = await this.pg.query(
+      `SELECT COUNT(*)::int AS total FROM system_logs ${whereSql}`,
+      params,
+    );
+    const total = Number(countRes.rows[0]?.total || 0);
+
+    const listParams = [...params, pageSize, offset];
+    const rowsRes = await this.pg.query(
+      `SELECT id, level, module, operation, message, request_id, method, route,
+              status, duration_ms, user_id, tenant_id, details, stack, created_at
+       FROM system_logs
+       ${whereSql}
+       ORDER BY created_at DESC, id DESC
+       LIMIT $${idx++} OFFSET $${idx++}`,
+      listParams,
+    );
+
+    const modRes = await this.pg.query(
+      `SELECT DISTINCT module FROM system_logs ORDER BY module ASC LIMIT 100`,
+    );
+
+    return {
+      items: rowsRes.rows.map((row: any) => ({
+        id: row.id,
+        timestamp: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+        level: row.level,
+        module: row.module,
+        operation: row.operation,
+        message: row.message,
+        requestId: row.request_id,
+        method: row.method,
+        route: row.route,
+        status: row.status !== null && row.status !== undefined ? Number(row.status) : null,
+        durationMs:
+          row.duration_ms !== null && row.duration_ms !== undefined ? Number(row.duration_ms) : null,
+        userId: row.user_id,
+        tenantId: row.tenant_id,
+        details: row.details ? redactValue(row.details) : null,
+        stack: row.stack || null,
+      })),
+      modules: modRes.rows.map((r: any) => r.module).filter(Boolean),
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      },
+    };
+  }
+
+  async getSystemLogById(id: string) {
+    if (!id) return null;
+    if (!this.pg) await this.init();
+    const res = await this.pg.query(
+      `SELECT id, level, module, operation, message, request_id, method, route,
+              status, duration_ms, user_id, tenant_id, details, stack, created_at
+       FROM system_logs WHERE id = $1 LIMIT 1`,
+      [id],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    return {
+      id: row.id,
+      timestamp: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+      level: row.level,
+      module: row.module,
+      operation: row.operation,
+      message: row.message,
+      requestId: row.request_id,
+      method: row.method,
+      route: row.route,
+      status: row.status !== null && row.status !== undefined ? Number(row.status) : null,
+      durationMs:
+        row.duration_ms !== null && row.duration_ms !== undefined ? Number(row.duration_ms) : null,
+      userId: row.user_id,
+      tenantId: row.tenant_id,
+      details: row.details ? redactValue(row.details) : null,
+      stack: row.stack || null,
+    };
+  }
+
+  async deleteSystemLogById(id: string): Promise<boolean> {
+    if (!id) return false;
+    if (!this.pg) await this.init();
+    const res = await this.pg.query(
+      `DELETE FROM system_logs WHERE id = $1 RETURNING id`,
+      [id],
+    );
+    return (res.rows?.length ?? res.affectedRows ?? res.rowCount ?? 0) > 0;
+  }
+
+  async deleteAllSystemLogs(): Promise<number> {
+    if (!this.pg) await this.init();
+    const res = await this.pg.query(`DELETE FROM system_logs`);
+    return Number(res?.rowCount ?? res?.affectedRows ?? 0);
+  }
+
+  async pruneSystemLogs(retentionDays = 30, maxRows = 50000): Promise<number> {
+    if (!this.pg) return 0;
+    const safeDays = Math.min(365, Math.max(1, Math.floor(retentionDays)));
+    const safeMaxRows = Math.min(500000, Math.max(100, Math.floor(maxRows)));
+    const cutoffIso = new Date(Date.now() - safeDays * 86400 * 1000).toISOString();
+
+    let deletedCount = 0;
+    try {
+      const ageRes = await this.pg.query(
+        `DELETE FROM system_logs WHERE created_at < $1`,
+        [cutoffIso],
+      );
+      deletedCount += Number(ageRes?.rowCount ?? ageRes?.affectedRows ?? 0);
+
+      const overflowRes = await this.pg.query(
+        `DELETE FROM system_logs
+         WHERE id IN (
+           SELECT id FROM system_logs
+           ORDER BY created_at DESC, id DESC
+           OFFSET $1
+         )`,
+        [safeMaxRows],
+      );
+      deletedCount += Number(overflowRes?.rowCount ?? overflowRes?.affectedRows ?? 0);
+    } catch {
+      return deletedCount;
+    }
+    return deletedCount;
+  }
+
+  async getSystemSetting<T = any>(key: string): Promise<T | null> {
+    await this.init();
+    const res = await this.pg.query(
+      `SELECT value FROM system_settings WHERE key = $1 LIMIT 1`,
+      [key],
+    );
+    return res.rows[0]?.value ?? null;
+  }
+
+  async setSystemSetting(key: string, value: any): Promise<void> {
+    await this.init();
+    await this.pg.query(
+      `INSERT INTO system_settings (key, value, updated_at)
+       VALUES ($1, $2::jsonb, CURRENT_TIMESTAMP)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+      [key, JSON.stringify(value)],
+    );
+  }
+
+  async getOfflineSyncReceipt(tenantId: string, userId: string, idempotencyKey: string) {
+    await this.init();
+    const res = await this.pg.query(
+      `SELECT status_code, response_json
+       FROM offline_sync_receipts
+       WHERE tenant_id = $1 AND user_id = $2 AND idempotency_key = $3
+       LIMIT 1`,
+      [tenantId, userId, idempotencyKey],
+    );
+    return res.rows[0] || null;
+  }
+
+  async saveOfflineSyncReceipt(
+    tenantId: string,
+    userId: string,
+    idempotencyKey: string,
+    method: string,
+    reqPath: string,
+    statusCode: number,
+    responseJson: any,
+  ): Promise<void> {
+    await this.init();
+    await this.pg.query(
+      `INSERT INTO offline_sync_receipts (id, tenant_id, user_id, idempotency_key, method, path, status_code, response_json)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+       ON CONFLICT (tenant_id, user_id, idempotency_key) DO NOTHING`,
+      [
+        crypto.randomUUID(),
+        tenantId,
+        userId,
+        idempotencyKey,
+        method,
+        reqPath,
+        statusCode,
+        JSON.stringify(responseJson),
+      ],
+    );
+  }
+
+  async getTaskById(tenantId: string, taskId: string) {
+    await this.init();
+    const res = await this.pg.query(
+      `SELECT t.*, b.name as branch_name
+       FROM tasks t
+       LEFT JOIN branches b ON b.id = t.branch_id
+       WHERE t.tenant_id = $1 AND t.id = $2
+       LIMIT 1`,
+      [tenantId, taskId],
+    );
+    return res.rows[0] ? this.mapTaskRow(res.rows[0]) : null;
+  }
+
+  async deleteTask(tenantId: string, taskId: string, userId: string, userRole: string) {
+    await this.init();
+    const existing = await this.getTaskById(tenantId, taskId);
+    if (!existing) return null;
+    const isManager = this.isManagerUser({ role_code: userRole });
+    if (!isManager && existing.assigned_user_id !== userId) {
+      const err: any = new Error("شما دسترسی حذف این پیگیری را ندارید.");
+      err.status = 403;
+      err.code = "FORBIDDEN";
+      throw err;
+    }
+    await this.pg.query(`DELETE FROM tasks WHERE id = $1 AND tenant_id = $2`, [taskId, tenantId]);
+    await this.addAuditLog(tenantId, userId, "TASK_DELETED", "TASK", taskId, { title: existing.title });
+    return existing;
+  }
+
+  async deleteProperty(tenantId: string, propertyId: string, userId: string, userRole: string) {
+    await this.init();
+    const existing = await this.getPropertyById(tenantId, propertyId, { id: userId, role_code: userRole || "AGENT" });
+    if (!existing) return null;
+    const isManager = this.isManagerUser({ role_code: userRole });
+    if (!isManager && existing.assigned_agent_id !== userId && existing.created_by_user_id !== userId) {
+      const err: any = new Error("شما دسترسی حذف این ملک را ندارید.");
+      err.status = 403;
+      err.code = "FORBIDDEN";
+      throw err;
+    }
+    const txCheck = await this.pg.query(
+      `SELECT id FROM transactions WHERE tenant_id = $1 AND property_id = $2 LIMIT 1`,
+      [tenantId, propertyId],
+    ).catch(() => ({ rows: [] }));
+    if (txCheck.rows.length > 0) {
+      const archived = await this.archiveProperty(tenantId, propertyId, userId);
+      return { archived: true, deleted: false, property: archived };
+    }
+    await this.pg.query(`DELETE FROM properties WHERE id = $1 AND tenant_id = $2`, [propertyId, tenantId]);
+    await this.addAuditLog(tenantId, userId, "PROPERTY_DELETED", "PROPERTY", propertyId, { code: existing.code, title: existing.title });
+    return { archived: false, deleted: true, id: propertyId };
+  }
+
+  async deleteCustomer(tenantId: string, customerId: string, userId: string, userRole: string) {
+    await this.init();
+    const existing = await this.getCustomerById(tenantId, customerId, { id: userId, role_code: userRole || "AGENT" });
+    if (!existing) return null;
+    const isManager = this.isManagerUser({ role_code: userRole });
+    if (!isManager && existing.assigned_agent_id !== userId && existing.created_by_user_id !== userId) {
+      const err: any = new Error("شما دسترسی حذف این متقاضی را ندارید.");
+      err.status = 403;
+      err.code = "FORBIDDEN";
+      throw err;
+    }
+    const txCheck = await this.pg.query(
+      `SELECT id FROM transactions WHERE tenant_id = $1 AND customer_id = $2 LIMIT 1`,
+      [tenantId, customerId],
+    ).catch(() => ({ rows: [] }));
+    if (txCheck.rows.length > 0) {
+      const archived = await this.archiveCustomer(tenantId, customerId, userId);
+      return { archived: true, deleted: false, customer: archived };
+    }
+    await this.pg.query(`DELETE FROM customers WHERE id = $1 AND tenant_id = $2`, [customerId, tenantId]);
+    await this.addAuditLog(tenantId, userId, "CUSTOMER_DELETED", "CUSTOMER", customerId, { code: existing.code, display_name: existing.display_name });
+    return { archived: false, deleted: true, id: customerId };
+  }
+
+  async getOrCreateNotificationPreferences(tenantId: string, userId: string) {
+    await this.init();
+    await this.pg.query(
+      `INSERT INTO notification_preferences (user_id, tenant_id)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [userId, tenantId],
+    );
+    const res = await this.pg.query(
+      `SELECT two_hour_reminder, overdue_reminder, visit_reminder, near_due_reminder, sync_alerts, updated_at
+       FROM notification_preferences
+       WHERE user_id = $1 AND tenant_id = $2
+       LIMIT 1`,
+      [userId, tenantId],
+    );
+    const row = res.rows[0] || {};
+    return {
+      two_hour_reminder: row.two_hour_reminder !== false,
+      overdue_reminder: row.overdue_reminder !== false,
+      visit_reminder: row.visit_reminder !== false,
+      near_due_reminder: row.near_due_reminder !== false,
+      sync_alerts: row.sync_alerts !== false,
+      updated_at: row.updated_at || new Date().toISOString(),
+    };
+  }
+
+  async updateNotificationPreferences(tenantId: string, userId: string, data: Record<string, boolean>) {
+    await this.init();
+    const current = await this.getOrCreateNotificationPreferences(tenantId, userId);
+    const next = {
+      two_hour_reminder: data.two_hour_reminder ?? current.two_hour_reminder,
+      overdue_reminder: data.overdue_reminder ?? current.overdue_reminder,
+      visit_reminder: data.visit_reminder ?? current.visit_reminder,
+      near_due_reminder: data.near_due_reminder ?? current.near_due_reminder,
+      sync_alerts: data.sync_alerts ?? current.sync_alerts,
+    };
+    await this.pg.query(
+      `UPDATE notification_preferences
+       SET two_hour_reminder = $1,
+           overdue_reminder = $2,
+           visit_reminder = $3,
+           near_due_reminder = $4,
+           sync_alerts = $5,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = $6 AND tenant_id = $7`,
+      [
+        Boolean(next.two_hour_reminder),
+        Boolean(next.overdue_reminder),
+        Boolean(next.visit_reminder),
+        Boolean(next.near_due_reminder),
+        Boolean(next.sync_alerts),
+        userId,
+        tenantId,
+      ],
+    );
+    return this.getOrCreateNotificationPreferences(tenantId, userId);
+  }
+
+  async insertNotificationIfNew(input: {
+    tenant_id: string;
+    user_id: string;
+    branch_id?: string | null;
+    category: string;
+    dedup_key: string;
+    title: string;
+    body: string;
+    entity_type?: string | null;
+    entity_id?: string | null;
+    target_url: string;
+    metadata?: Record<string, any> | null;
+    scheduled_for?: string | null;
+  }) {
+    await this.init();
+    const id = crypto.randomUUID();
+    const res = await this.pg.query(
+      `INSERT INTO notifications (
+         id, tenant_id, user_id, branch_id, category, dedup_key,
+         title, body, entity_type, entity_id, target_url, metadata, scheduled_for
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
+       ON CONFLICT (tenant_id, user_id, dedup_key) DO NOTHING
+       RETURNING *`,
+      [
+        id,
+        input.tenant_id,
+        input.user_id,
+        input.branch_id || null,
+        input.category,
+        input.dedup_key,
+        input.title,
+        input.body,
+        input.entity_type || null,
+        input.entity_id || null,
+        input.target_url,
+        input.metadata ? JSON.stringify(input.metadata) : null,
+        input.scheduled_for || null,
+      ],
+    );
+    return res.rows[0] || null;
+  }
+
+  async markNotificationPushDelivered(notificationId: string): Promise<void> {
+    await this.init();
+    await this.pg.query(
+      `UPDATE notifications SET delivered_push = true WHERE id = $1`,
+      [notificationId],
+    );
+  }
+
+  async getNotifications(
+    tenantId: string,
+    userId: string,
+    options: { unreadOnly?: boolean; category?: string; limit?: number } = {},
+  ) {
+    await this.init();
+    const limit = Math.min(200, Math.max(1, Number(options.limit || 80)));
+    const params: any[] = [tenantId, userId];
+    let whereSql = `WHERE tenant_id = $1 AND user_id = $2`;
+    if (options.unreadOnly) {
+      whereSql += ` AND is_read = false`;
+    }
+    if (options.category && options.category !== "ALL") {
+      params.push(options.category);
+      whereSql += ` AND category = $${params.length}`;
+    }
+    const [listRes, unreadRes] = await Promise.all([
+      this.pg.query(
+        `SELECT * FROM notifications ${whereSql} ORDER BY created_at DESC LIMIT $${params.length + 1}`,
+        [...params, limit],
+      ),
+      this.pg.query(
+        `SELECT COUNT(*)::int AS cnt FROM notifications WHERE tenant_id = $1 AND user_id = $2 AND is_read = false`,
+        [tenantId, userId],
+      ),
+    ]);
+    return {
+      items: listRes.rows,
+      unread_count: Number(unreadRes.rows[0]?.cnt || 0),
+    };
+  }
+
+  async markNotificationRead(tenantId: string, userId: string, notificationId: string) {
+    await this.init();
+    const res = await this.pg.query(
+      `UPDATE notifications
+       SET is_read = true, read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
+       WHERE id = $1 AND tenant_id = $2 AND user_id = $3
+       RETURNING *`,
+      [notificationId, tenantId, userId],
+    );
+    return res.rows[0] || null;
+  }
+
+  async markAllNotificationsRead(tenantId: string, userId: string) {
+    await this.init();
+    const res = await this.pg.query(
+      `UPDATE notifications
+       SET is_read = true, read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
+       WHERE tenant_id = $1 AND user_id = $2 AND is_read = false`,
+      [tenantId, userId],
+    );
+    return Number(res?.rowCount ?? res?.affectedRows ?? 0);
+  }
+
+  async deleteNotification(tenantId: string, userId: string, notificationId: string) {
+    await this.init();
+    const res = await this.pg.query(
+      `DELETE FROM notifications WHERE id = $1 AND tenant_id = $2 AND user_id = $3 RETURNING id`,
+      [notificationId, tenantId, userId],
+    );
+    return (res.rows?.length ?? 0) > 0;
+  }
+
+  async clearReadNotifications(tenantId: string, userId: string) {
+    await this.init();
+    const res = await this.pg.query(
+      `DELETE FROM notifications WHERE tenant_id = $1 AND user_id = $2 AND is_read = true`,
+      [tenantId, userId],
+    );
+    return Number(res?.rowCount ?? res?.affectedRows ?? 0);
+  }
+
+  async upsertPushSubscription(
+    tenantId: string,
+    userId: string,
+    sub: { endpoint: string; keys: { p256dh: string; auth: string } },
+    userAgent?: string,
+  ) {
+    await this.init();
+    const id = crypto.randomUUID();
+    const res = await this.pg.query(
+      `INSERT INTO push_subscriptions (id, tenant_id, user_id, endpoint, p256dh, auth, user_agent, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+       ON CONFLICT (tenant_id, user_id, endpoint)
+       DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, user_agent = EXCLUDED.user_agent, updated_at = CURRENT_TIMESTAMP
+       RETURNING id, tenant_id, user_id, endpoint, created_at, updated_at`,
+      [id, tenantId, userId, sub.endpoint, sub.keys.p256dh, sub.keys.auth, userAgent || null],
+    );
+    return res.rows[0];
+  }
+
+  async deletePushSubscription(tenantId: string, userId: string, endpoint?: string) {
+    await this.init();
+    if (endpoint) {
+      await this.pg.query(
+        `DELETE FROM push_subscriptions WHERE tenant_id = $1 AND user_id = $2 AND endpoint = $3`,
+        [tenantId, userId, endpoint],
+      );
+    } else {
+      await this.pg.query(
+        `DELETE FROM push_subscriptions WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+    }
+  }
+
+  async deletePushSubscriptionByEndpoint(endpoint: string) {
+    await this.init();
+    await this.pg.query(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [endpoint]);
+  }
+
+  async getPushSubscriptionsForUser(tenantId: string, userId: string) {
+    await this.init();
+    const res = await this.pg.query(
+      `SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE tenant_id = $1 AND user_id = $2`,
+      [tenantId, userId],
+    );
+    return res.rows;
+  }
+
+  async getActiveTasksForNotificationSweep(filter?: { tenantId?: string; userId?: string }) {
+    await this.init();
+    const params: any[] = [];
+    let extraWhere = "";
+    if (filter?.tenantId) {
+      params.push(filter.tenantId);
+      extraWhere += ` AND t.tenant_id = $${params.length}`;
+    }
+    if (filter?.userId) {
+      params.push(filter.userId);
+      extraWhere += ` AND t.assigned_user_id = $${params.length}`;
+    }
+    const res = await this.pg.query(
+      `SELECT t.*, tn.timezone, tn.status AS tenant_status, tn.subscription_status, tn.subscription_expires_at
+       FROM tasks t
+       JOIN tenants tn ON tn.id = t.tenant_id
+       JOIN users u ON u.id = t.assigned_user_id AND u.tenant_id = t.tenant_id
+       WHERE t.status NOT IN ('COMPLETED', 'CANCELLED')
+         AND tn.status = 'ACTIVE'
+         AND tn.subscription_status NOT IN ('EXPIRED', 'SUSPENDED', 'CANCELLED')
+         AND (tn.subscription_expires_at IS NULL OR tn.subscription_expires_at > CURRENT_TIMESTAMP)
+         AND u.is_active = true
+         ${extraWhere}
+       ORDER BY t.due_at ASC`,
+      params,
+    );
+    return res.rows;
   }
 }const postgresDb=new PostgresDatabase;export{normalizeIranianPhone as normalizePhoneNumber,postgresDb};

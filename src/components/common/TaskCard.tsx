@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Building2,
   CircleAlert,
@@ -9,10 +9,12 @@ import {
   FileText,
   Handshake,
   MessageSquare,
+  Pencil,
   Phone,
   RefreshCw,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   TrendingUp,
   User,
   Users,
@@ -23,7 +25,16 @@ export const TaskCard: React.FC<{
   task: any;
   onComplete?: (id: string, visitResult?: string) => void;
   onCancel?: (id: string) => void;
-}> = ({ task, onComplete, onCancel }) => {
+  onEdit?: (task: any) => void;
+  onDelete?: (id: string) => void;
+  highlighted?: boolean;
+}> = ({ task, onComplete, onCancel, onEdit, onDelete, highlighted = false }) => {
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (highlighted && cardRef.current && typeof cardRef.current.scrollIntoView === "function") {
+      cardRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlighted]);
   const isOverdue =
     task.status === "OVERDUE" ||
     (task.status === "TODO" && new Date(task.due_at) < new Date());
@@ -87,8 +98,11 @@ export const TaskCard: React.FC<{
 
   return (
     <div
+      ref={cardRef}
       className={`border rounded-xl p-3.5 transition select-none ${
-        isOverdue
+        highlighted
+          ? "bg-blue-50/70 border-[#145DB5] ring-2 ring-[#145DB5]/30 shadow-md"
+          : isOverdue
           ? "bg-rose-50/40 border-rose-200"
           : isCompleted
           ? "bg-slate-50 border-slate-200 opacity-70"
@@ -129,45 +143,72 @@ export const TaskCard: React.FC<{
               </span>
             </span>
           )}
+          {task._offlinePending && (
+            <span className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-lg">
+              در انتظار همگام‌سازی
+            </span>
+          )}
         </div>
-        {!isCompleted && !isCancelled && (
-          <div className="flex items-center gap-1.5">
-            {onComplete && (
-              <button
-                onClick={() => {
-                  task.type === "VISIT"
-                    ? setShowVisitModal(true)
-                    : completeWithResult();
-                }}
-                className="flex items-center gap-1 text-[11px] text-[#145DB5] hover:text-emerald-700 font-extrabold px-2 py-1 rounded-lg hover:bg-slate-100 active:scale-95 transition"
-                title="علامت‌گذاری به عنوان انجام شده"
-              >
-                <CircleCheck className="w-4 h-4 text-emerald-600" />
-                <span>انجام شد</span>
-              </button>
-            )}
-            {onCancel && (
-              <button
-                onClick={() => onCancel(task.id)}
-                className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 active:scale-95 transition"
-                title="لغو اقدام"
-              >
-                <CircleX className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        )}
-        {isCompleted && (
-          <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100 flex items-center gap-1">
-            <CircleCheck className="w-3 h-3 text-emerald-600" />
-            انجام شد
-          </span>
-        )}
-        {isCancelled && (
-          <span className="text-[11px] font-extrabold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-lg flex items-center gap-1">
-            لغو شد
-          </span>
-        )}
+        <div className="flex items-center gap-1">
+          {!isCompleted && !isCancelled && (
+            <>
+              {onComplete && (
+                <button
+                  onClick={() => {
+                    task.type === "VISIT"
+                      ? setShowVisitModal(true)
+                      : completeWithResult();
+                  }}
+                  className="flex items-center gap-1 text-[11px] text-[#145DB5] hover:text-emerald-700 font-extrabold px-2 py-1 rounded-lg hover:bg-slate-100 active:scale-95 transition"
+                  title="علامت‌گذاری به عنوان انجام شده"
+                >
+                  <CircleCheck className="w-4 h-4 text-emerald-600" />
+                  <span>انجام شد</span>
+                </button>
+              )}
+              {onEdit && (
+                <button
+                  type="button"
+                  onClick={() => onEdit(task)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-[#145DB5] hover:bg-blue-50 active:scale-95 transition"
+                  title="ویرایش پیگیری"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+              )}
+              {onCancel && (
+                <button
+                  onClick={() => onCancel(task.id)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 active:scale-95 transition"
+                  title="لغو اقدام"
+                >
+                  <CircleX className="w-4 h-4" />
+                </button>
+              )}
+            </>
+          )}
+          {onDelete && (
+            <button
+              type="button"
+              onClick={() => onDelete(task.id)}
+              className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 active:scale-95 transition"
+              title="حذف وظیفه"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {isCompleted && (
+            <span className="text-[11px] font-extrabold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100 flex items-center gap-1">
+              <CircleCheck className="w-3 h-3 text-emerald-600" />
+              انجام شد
+            </span>
+          )}
+          {isCancelled && (
+            <span className="text-[11px] font-extrabold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-lg flex items-center gap-1">
+              لغو شد
+            </span>
+          )}
+        </div>
       </div>
       <h4
         className={`text-xs sm:text-sm font-bold mb-1.5 ${

@@ -1,6 +1,7 @@
 import React from "react";
-import { ChevronDown, GitBranch, LogOut, RefreshCw, Search } from "lucide-react";
+import { Bell, ChevronDown, Cloud, GitBranch, LogOut, RefreshCw, Search, WifiOff } from "lucide-react";
 import { useAuth } from "../../context/AuthContext.tsx";
+import type { SyncStatusState } from "../../services/offlineSync.ts";
 
 export const TopHeader: React.FC<{
   onOpenSearch: () => void;
@@ -9,6 +10,11 @@ export const TopHeader: React.FC<{
   activeBranchId?: string;
   branches?: any[];
   onSelectBranch?: (branchId: string) => void;
+  unreadNotificationsCount?: number;
+  syncStatus?: SyncStatusState | null;
+  isOfflineMode?: boolean;
+  onOpenNotifications?: () => void;
+  onOpenSyncModal?: () => void;
 }> = ({
   onOpenSearch,
   onRefresh,
@@ -16,10 +22,17 @@ export const TopHeader: React.FC<{
   activeBranchId = "ALL",
   branches = [],
   onSelectBranch,
+  unreadNotificationsCount = 0,
+  syncStatus,
+  isOfflineMode = false,
+  onOpenNotifications,
+  onOpenSyncModal,
 }) => {
   const { user, tenant, logout } = useAuth();
   const isAdminOrOwner =
     user?.role_code === "ADMIN" || user?.role_code === "OWNER";
+  const pendingCount = syncStatus?.pendingCount || 0;
+  const issueCount = (syncStatus?.failedCount || 0) + (syncStatus?.conflictCount || 0);
 
   return (
     <header className="sticky top-0 z-30 bg-white border-b border-[#E2E8F0] shadow-xs px-3.5 py-2">
@@ -46,6 +59,53 @@ export const TopHeader: React.FC<{
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            {onOpenSyncModal && (
+              <button
+                type="button"
+                onClick={onOpenSyncModal}
+                className={`relative w-8 h-8 rounded-lg border flex items-center justify-center active:scale-95 transition ${
+                  issueCount > 0
+                    ? "border-rose-200 bg-rose-50 text-rose-700"
+                    : isOfflineMode || (syncStatus && !syncStatus.isOnline)
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : pendingCount > 0
+                    ? "border-blue-200 bg-blue-50 text-[#145DB5]"
+                    : "border-[#E2E8F0] bg-white text-emerald-600 hover:bg-slate-50"
+                }`}
+                title="وضعیت اتصال و صف همگام‌سازی آفلاین"
+              >
+                {isOfflineMode || (syncStatus && !syncStatus.isOnline) ? (
+                  <WifiOff className="w-3.5 h-3.5" />
+                ) : (
+                  <Cloud className={`w-4 h-4 ${syncStatus?.isSyncing ? "animate-pulse" : ""}`} />
+                )}
+                {(pendingCount > 0 || issueCount > 0) && (
+                  <span
+                    className={`absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-black text-white flex items-center justify-center ${
+                      issueCount > 0 ? "bg-rose-600" : "bg-[#145DB5]"
+                    }`}
+                  >
+                    {issueCount > 0 ? issueCount : pendingCount}
+                  </span>
+                )}
+              </button>
+            )}
+            {onOpenNotifications && (
+              <button
+                type="button"
+                onClick={onOpenNotifications}
+                className="relative w-8 h-8 rounded-lg border border-[#E2E8F0] bg-white text-[#172033] flex items-center justify-center hover:bg-slate-50 active:scale-95 transition"
+                title="مرکز اعلان‌ها"
+                aria-label="مرکز اعلان‌ها"
+              >
+                <Bell className="w-4 h-4 text-[#145DB5]" />
+                {unreadNotificationsCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-black flex items-center justify-center">
+                    {unreadNotificationsCount > 99 ? "99+" : unreadNotificationsCount}
+                  </span>
+                )}
+              </button>
+            )}
             <button
               onClick={onOpenSearch}
               className="w-8 h-8 rounded-lg border border-[#E2E8F0] bg-white text-[#172033] flex items-center justify-center hover:bg-slate-50 active:scale-95 transition"

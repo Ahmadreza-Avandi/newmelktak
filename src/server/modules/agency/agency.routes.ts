@@ -97,7 +97,13 @@ agencyRouter.post("/branches", requireAdminRole, async (req, res, next) => {
       data: newBranch,
       message: `شعبه «${newBranch.name}» با موفقیت ایجاد شد.`
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === "PLAN_BRANCH_LIMIT_EXCEEDED" || error?.code === "INVALID_MANAGER_USER") {
+      return res.status(error.status || 403).json({
+        success: false,
+        error: { code: error.code, message: error.message }
+      });
+    }
     next(error);
   }
 });
@@ -113,7 +119,13 @@ agencyRouter.patch("/branches/:id", requireAdminRole, async (req, res, next) => 
       data: updated,
       message: `اطلاعات شعبه «${updated.name}» با موفقیت بروزرسانی شد.`
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === "PLAN_BRANCH_LIMIT_EXCEEDED" || error?.code === "INVALID_MANAGER_USER") {
+      return res.status(error.status || 403).json({
+        success: false,
+        error: { code: error.code, message: error.message }
+      });
+    }
     next(error);
   }
 });
@@ -240,7 +252,13 @@ agencyRouter.post("/agents", requireManagerRole, async (req, res, next) => {
       data: newAgent,
       message: "مشاور جدید با موفقیت ایجاد و دسترسی ثبت گردید."
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === "PLAN_AGENT_LIMIT_EXCEEDED") {
+      return res.status(403).json({
+        success: false,
+        error: { code: error.code, message: error.message }
+      });
+    }
     next(error);
   }
 });
@@ -337,7 +355,13 @@ agencyRouter.patch("/agents/:id/status", requireManagerRole, async (req, res, ne
         ? "حساب کاربری مشاور با موفقیت فعال شد."
         : "حساب کاربری مشاور با موفقیت غیرفعال و نشست‌های فعال آن باطل گردید."
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.code === "PLAN_AGENT_LIMIT_EXCEEDED") {
+      return res.status(403).json({
+        success: false,
+        error: { code: error.code, message: error.message }
+      });
+    }
     next(error);
   }
 });

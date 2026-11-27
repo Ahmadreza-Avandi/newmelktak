@@ -325,9 +325,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                           </h4>
                         </div>
                         <p className="text-[11px] text-[#667085] truncate mt-0.5">
-                          {item.property_neighborhood ||
-                            item.property_city ||
-                            "محدوده ثبت نشده"}
+                          {item.property_neighborhood || "محدوده ثبت نشده"}
                           {item.property_area_sqm
                             ? ` • ${item.property_area_sqm} متر`
                             : ""}

@@ -4,6 +4,8 @@ declare global {
       user?: any;
       tenant?: any;
       supportSession?: any;
+      platformAdmin?: any;
+      requestId?: string;
     }
   }
 }

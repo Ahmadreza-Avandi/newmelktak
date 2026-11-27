@@ -392,3 +392,21 @@ export const support_audit_logs = pgTable("support_audit_logs", {
   ip_address: varchar("ip_address", { length: 45 }),
   created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const system_logs = pgTable("system_logs", {
+  id: uuid("id").primaryKey(),
+  level: varchar("level", { length: 16 }).notNull(),
+  module: varchar("module", { length: 80 }).notNull(),
+  operation: varchar("operation", { length: 100 }).notNull(),
+  message: text("message").notNull(),
+  request_id: varchar("request_id", { length: 80 }),
+  method: varchar("method", { length: 16 }),
+  route: varchar("route", { length: 255 }),
+  status: integer("status"),
+  duration_ms: integer("duration_ms"),
+  user_id: varchar("user_id", { length: 100 }),
+  tenant_id: varchar("tenant_id", { length: 100 }),
+  details: jsonb("details"),
+  stack: text("stack"),
+  created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

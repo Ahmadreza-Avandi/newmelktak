@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Lock,
   Users,
@@ -17,12 +17,22 @@ import {
   Trash2,
   Plus,
   Sparkles,
+  Archive,
+  Loader2,
+  Pencil,
 } from "lucide-react";
 import { api } from "../../services/apiClient.ts";
+import { offlineSync } from "../../services/offlineSync.ts";
 import { useAuth } from "../../context/AuthContext.tsx";
 import { formatCompactPrice } from "../../utils/jalaali.ts";
 import { EntityDocumentsPanel } from "../common/EntityDocumentsPanel.tsx";
 import { PropertyShareModal } from "./PropertyShareModal.tsx";
+
+const normalizePropStatus = (status: string): string => {
+  if (status === "AVAILABLE") return "ACTIVE";
+  if (status === "UNDER_NEGOTIATION") return "NEGOTIATION";
+  return status || "ACTIVE";
+};
 
 export const PropertyDetailModal: React.FC<{
   property: any;
@@ -30,7 +40,21 @@ export const PropertyDetailModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
   onRefresh: () => void;
-}> = ({ property: e, customers: t, isOpen: n, onClose: r, onRefresh: i }) => {
+  onStatusChanged?: (
+    propertyId: string,
+    newStatus: string,
+    propertyTitle: string
+  ) => void;
+  onDeleted?: (propertyId: string, propertyTitle: string) => void;
+}> = ({
+  property: e,
+  customers: t,
+  isOpen: n,
+  onClose: r,
+  onRefresh: i,
+  onStatusChanged,
+  onDeleted,
+}) => {
   const [a, o] = useState<"DETAILS" | "MEDIA" | "MATCHES" | "DOCUMENTS">("DETAILS");
   const [s, c] = useState<any[]>(e.media || []);
   const [l, u] = useState(0);
@@ -39,9 +63,16 @@ export const PropertyDetailModal: React.FC<{
   const [h, g] = useState(false);
   const [v, y] = useState<string | null>(null);
   const [x, C] = useState(false);
-  const [w, E] = useState<string>(e.status);
-  const [D, O] = useState<string>(e.status);
-  const { user: k } = useAuth();
+  const [w, E] = useState<string>(() => normalizePropStatus(e.status));
+  const [D, O] = useState<string>(() => normalizePropStatus(e.status));
+  const [transitionNotice, setTransitionNotice] = useState<{
+    title: string;
+    subtitle: string;
+    isArchive: boolean;
+  } | null>(null);
+  const transitionTimerRef = useRef<number | null>(null);
+  const { user: k, tenant } = useAuth();
+  const scope = tenant && k ? { tenantId: tenant.id, userId: k.id } : null;
   const A =
     k?.role_code === "BRANCH_MANAGER" ||
     k?.role_code === "ADMIN" ||
@@ -54,28 +85,85 @@ export const PropertyDetailModal: React.FC<{
   const [ne, L] = useState<any[]>([]);
   const [R, re] = useState(false);
   const [ie, ae] = useState(false);
+  const [currentNeighborhood, setCurrentNeighborhood] = useState<string>(
+    e.address?.district || e.address?.neighborhood || ""
+  );
+  const [deletingNeighborhood, setDeletingNeighborhood] = useState(false);
+  const [editingProp, setEditingProp] = useState(false);
+  const [edTitle, setEdTitle] = useState(e.title || "");
+  const [edArea, setEdArea] = useState(String(e.area_sqm || ""));
+  const [edPriceTotal, setEdPriceTotal] = useState(String(e.price_total || ""));
+  const [edDeposit, setEdDeposit] = useState(String(e.deposit_amount || ""));
+  const [edRent, setEdRent] = useState(String(e.rent_amount || ""));
+  const [edBedrooms, setEdBedrooms] = useState(String(e.bedrooms ?? ""));
+  const [edFloor, setEdFloor] = useState(String(e.floor ?? ""));
+  const [edNeighborhood, setEdNeighborhood] = useState(
+    e.address?.district || e.address?.neighborhood || ""
+  );
+  const [edDesc, setEdDesc] = useState(e.description || "");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [confirmDeleteProp, setConfirmDeleteProp] = useState(false);
+  const [deletingProp, setDeletingProp] = useState(false);
 
   useEffect(() => {
-    E(e.status);
-    O(e.status);
+    const normalized = normalizePropStatus(e.status);
+    E(normalized);
+    O(normalized);
     M(e.visibility || "AGENCY");
     ee(e.assigned_agent_id || "");
     te(e.assigned_agent_name || "");
     I(e.assigned_agent_id || "");
+    setCurrentNeighborhood(e.address?.district || e.address?.neighborhood || "");
+    setEdTitle(e.title || "");
+    setEdArea(String(e.area_sqm || ""));
+    setEdPriceTotal(String(e.price_total || ""));
+    setEdDeposit(String(e.deposit_amount || ""));
+    setEdRent(String(e.rent_amount || ""));
+    setEdBedrooms(String(e.bedrooms ?? ""));
+    setEdFloor(String(e.floor ?? ""));
+    setEdNeighborhood(e.address?.district || e.address?.neighborhood || "");
+    setEdDesc(e.description || "");
+    setEditingProp(false);
+    setConfirmDeleteProp(false);
+    setTransitionNotice(null);
+    if (transitionTimerRef.current !== null) {
+      window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = null;
+    }
   }, [e]);
 
   useEffect(() => {
+    return () => {
+      if (transitionTimerRef.current !== null) {
+        window.clearTimeout(transitionTimerRef.current);
+        transitionTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!n) return;
-    api.get(`/api/v1/properties/${e.id}/media`).then((res) => {
-      if (res.success && res.data) c(res.data);
-    });
-    api.get(`/api/v1/properties/${e.id}/matches`).then((res) => {
-      if (res.success && res.data) m(res.data);
-    });
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    if (String(e.id || "").startsWith("offline-")) return;
+    api
+      .get(`/api/v1/properties/${e.id}/media`)
+      .then((res) => {
+        if (res.success && res.data) c(res.data);
+      })
+      .catch(() => {});
+    api
+      .get(`/api/v1/properties/${e.id}/matches`)
+      .then((res) => {
+        if (res.success && res.data) m(res.data);
+      })
+      .catch(() => {});
     if (A) {
-      api.get("/api/v1/agency/agents").then((res) => {
-        if (res.success && res.data) L(res.data.filter((item: any) => item.is_active));
-      });
+      api
+        .get("/api/v1/agency/agents")
+        .then((res) => {
+          if (res.success && res.data) L(res.data.filter((item: any) => item.is_active));
+        })
+        .catch(() => {});
     }
   }, [n, e.id, A]);
 
@@ -83,18 +171,25 @@ export const PropertyDetailModal: React.FC<{
 
   const z = (msg: string) => {
     y(msg);
-    setTimeout(() => y(null), 3000);
+    setTimeout(() => y(null), 3500);
   };
 
   const oe = async (vis: string) => {
-    if (vis !== j) {
+    if (vis !== j && scope) {
       re(true);
       try {
-        const res = await api.patch(`/api/v1/properties/${e.id}`, {
-          visibility: vis,
+        const res = await offlineSync.mutate(scope, {
+          method: "PATCH",
+          path: `/api/v1/properties/${e.id}`,
+          body: { visibility: vis },
+          entityType: "PROPERTY",
+          entityId: e.id,
+          expectedUpdatedAt: e.updated_at || null,
+          actionLabel: `تغییر سطح دسترسی ملک کد ${e.code}`,
         });
         if (res.success) {
           M(vis);
+          e.visibility = vis;
           z(
             vis === "PRIVATE"
               ? "فایل به عنوان «فایل اختصاصی» تنظیم شد."
@@ -105,10 +200,92 @@ export const PropertyDetailModal: React.FC<{
           z(res.error?.message || "خطا در تغییر سطح دسترسی.");
         }
       } catch {
-        z("خطا در ارتباط با سرور.");
+        z("خطا در تغییر سطح دسترسی.");
       } finally {
         re(false);
       }
+    }
+  };
+
+  const handleSavePropertyEdit = async (ev: React.FormEvent) => {
+    ev.preventDefault();
+    if (!scope || savingEdit) return;
+    const areaNum = Number(edArea);
+    if (!edTitle.trim() || !areaNum || areaNum <= 0) {
+      z("عنوان و متراژ معتبر الزامی است.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const payload: any = {
+        title: edTitle.trim(),
+        area_sqm: areaNum,
+        bedrooms: edBedrooms !== "" ? Number(edBedrooms) : undefined,
+        floor: edFloor !== "" ? Number(edFloor) : undefined,
+        district: edNeighborhood.trim() || null,
+        neighborhood: edNeighborhood.trim() || null,
+        description: edDesc.trim() || undefined,
+      };
+      if (e.listing_type === "SALE") {
+        payload.price_total = Number(edPriceTotal) || 0;
+      } else {
+        payload.deposit_amount = Number(edDeposit) || 0;
+        payload.rent_amount = Number(edRent) || 0;
+      }
+
+      const res = await offlineSync.mutate(scope, {
+        method: "PATCH",
+        path: `/api/v1/properties/${e.id}`,
+        body: payload,
+        entityType: "PROPERTY",
+        entityId: e.id,
+        expectedUpdatedAt: e.updated_at || null,
+        actionLabel: `ویرایش ملک «${payload.title}»`,
+      });
+      if (res.success) {
+        Object.assign(e, payload);
+        e.address = {
+          ...(e.address || {}),
+          district: payload.district || "",
+          neighborhood: payload.neighborhood || "",
+        };
+        setCurrentNeighborhood(payload.neighborhood || "");
+        setEditingProp(false);
+        z(
+          res.queuedOffline
+            ? "ویرایش ملک در صف آفلاین ذخیره شد."
+            : "مشخصات ملک با موفقیت ویرایش شد."
+        );
+        i();
+      } else {
+        z(res.error?.message || "خطا در ویرایش ملک.");
+      }
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const handleDeleteProperty = async () => {
+    if (!scope || deletingProp) return;
+    setDeletingProp(true);
+    try {
+      const res = await offlineSync.mutate(scope, {
+        method: "DELETE",
+        path: `/api/v1/properties/${e.id}`,
+        entityType: "PROPERTY",
+        entityId: e.id,
+        expectedUpdatedAt: e.updated_at || null,
+        actionLabel: `حذف ملک «${e.title}»`,
+      });
+      if (res.success) {
+        onDeleted?.(e.id, e.title);
+        i();
+        r();
+      } else {
+        z(res.error?.message || "خطا در حذف ملک.");
+      }
+    } finally {
+      setDeletingProp(false);
     }
   };
 
@@ -217,17 +394,66 @@ export const PropertyDetailModal: React.FC<{
   };
 
   const de = async () => {
-    if (D === w) return;
-    const prevStatus = w;
+    const nextCanonical = normalizePropStatus(D);
+    const prevStatus = normalizePropStatus(w);
+    if (nextCanonical === prevStatus || !scope) return;
+
     C(true);
-    E(D);
+    E(nextCanonical);
     try {
-      const res = await api.patch(`/api/v1/properties/${e.id}/status`, {
-        status: D,
+      const res = await offlineSync.mutate(scope, {
+        method: "PATCH",
+        path: `/api/v1/properties/${e.id}/status`,
+        body: { status: nextCanonical },
+        entityType: "PROPERTY",
+        entityId: e.id,
+        expectedUpdatedAt: e.updated_at || null,
+        actionLabel: `تغییر وضعیت ملک «${e.title}»`,
       });
       if (res.success) {
-        z(`وضعیت پرونده با موفقیت به «${fe(D)}» تغییر و ذخیره شد.`);
-        i();
+        e.status = nextCanonical;
+        e.is_archived = nextCanonical === "ARCHIVED";
+        const isMovingToArchive =
+          nextCanonical === "ARCHIVED" && prevStatus !== "ARCHIVED";
+        const isRestoringFromArchive =
+          prevStatus === "ARCHIVED" && nextCanonical !== "ARCHIVED";
+
+        if (isMovingToArchive || isRestoringFromArchive) {
+          setTransitionNotice(
+            isMovingToArchive
+              ? {
+                  title: "در حال انتقال ملک به بایگانی...",
+                  subtitle:
+                    "این فایل تا لحظاتی دیگر از لیست فعال و آماده حذف و به بایگانی منتقل می‌شود.",
+                  isArchive: true,
+                }
+              : {
+                  title: "در حال بازگردانی ملک به لیست فعال...",
+                  subtitle:
+                    "این فایل تا لحظاتی دیگر از بایگانی خارج و به فهرست فعال و آماده بازگردانده می‌شود.",
+                  isArchive: false,
+                }
+          );
+
+          if (transitionTimerRef.current !== null) {
+            window.clearTimeout(transitionTimerRef.current);
+          }
+          transitionTimerRef.current = window.setTimeout(() => {
+            transitionTimerRef.current = null;
+            setTransitionNotice(null);
+            onStatusChanged?.(e.id, nextCanonical, e.title);
+            i();
+            r();
+          }, 2200);
+        } else {
+          z(
+            res.queuedOffline
+              ? `وضعیت به «${fe(nextCanonical)}» تغییر کرد (در صف همگام‌سازی).`
+              : `وضعیت پرونده با موفقیت به «${fe(nextCanonical)}» تغییر و ذخیره شد.`
+          );
+          onStatusChanged?.(e.id, nextCanonical, e.title);
+          i();
+        }
       } else {
         E(prevStatus);
         O(prevStatus);
@@ -236,7 +462,7 @@ export const PropertyDetailModal: React.FC<{
     } catch {
       E(prevStatus);
       O(prevStatus);
-      z("خطا در ارتباط با سرور.");
+      z("خطا در تغییر وضعیت ملک.");
     } finally {
       C(false);
     }
@@ -267,7 +493,28 @@ export const PropertyDetailModal: React.FC<{
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4 select-none">
-      <div className="w-full max-w-lg max-h-[94vh] flex flex-col bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl animate-in slide-in-from-bottom">
+      <div className="relative w-full max-w-lg max-h-[94vh] flex flex-col bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl animate-in slide-in-from-bottom">
+        {transitionNotice && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="absolute inset-0 z-30 bg-white/95 backdrop-blur-xs rounded-t-2xl sm:rounded-2xl flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-200"
+          >
+            <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center mb-4 relative">
+              <Archive className="w-6 h-6 text-[#145DB5]" />
+              <Loader2 className="w-12 h-12 text-[#145DB5]/40 animate-spin absolute" />
+            </div>
+            <h3 className="text-sm font-extrabold text-[#172033] mb-1.5">
+              {transitionNotice.title}
+            </h3>
+            <p className="text-xs text-slate-600 leading-relaxed max-w-xs mb-4">
+              {transitionNotice.subtitle}
+            </p>
+            <div className="w-48 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              <div className="h-full bg-[#145DB5] rounded-full animate-pulse w-full" />
+            </div>
+          </div>
+        )}
         <div className="flex items-center justify-between p-3.5 border-b border-slate-100 sticky top-0 bg-white z-20">
           <div className="flex items-center gap-2">
             <span className="text-xs font-black text-[#145DB5] bg-blue-50 px-2 py-0.5 rounded border border-blue-100">
@@ -300,6 +547,26 @@ export const PropertyDetailModal: React.FC<{
             )}
           </div>
           <div className="flex items-center gap-1.5">
+            {(A ||
+              e.assigned_agent_id === k?.id ||
+              e.created_by_user_id === k?.id) && (
+              <button
+                type="button"
+                onClick={() => {
+                  o("DETAILS");
+                  setEditingProp((prev) => !prev);
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold border transition cursor-pointer ${
+                  editingProp
+                    ? "bg-amber-600 text-white border-amber-600"
+                    : "bg-white border-slate-300 text-slate-700 hover:border-[#145DB5] hover:text-[#145DB5]"
+                }`}
+                title="ویرایش مشخصات ملک"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>{editingProp ? "بستن ویرایش" : "ویرایش"}</span>
+              </button>
+            )}
             <button
               onClick={() => f(true)}
               className="flex items-center gap-1 bg-[#145DB5] text-white px-2.5 py-1 rounded-lg text-xs font-bold hover:bg-[#0F4383] transition"
@@ -377,6 +644,142 @@ export const PropertyDetailModal: React.FC<{
         </div>
 
         <div className="p-4 space-y-4 overflow-y-auto flex-1 text-xs">
+          {a === "DETAILS" && editingProp && (
+            <form
+              onSubmit={handleSavePropertyEdit}
+              className="space-y-3 bg-blue-50/40 border border-blue-200 rounded-2xl p-3.5"
+            >
+              <h4 className="font-extrabold text-[#145DB5] text-xs">
+                ویرایش مشخصات ملک
+              </h4>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  عنوان ملک
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={edTitle}
+                  onChange={(ev) => setEdTitle(ev.target.value)}
+                  className="w-full bg-white rounded-lg border border-slate-300 p-2 text-xs"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    متراژ (متر)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    value={edArea}
+                    onChange={(ev) => setEdArea(ev.target.value)}
+                    className="w-full bg-white rounded-lg border border-slate-300 p-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    محله
+                  </label>
+                  <input
+                    type="text"
+                    value={edNeighborhood}
+                    onChange={(ev) => setEdNeighborhood(ev.target.value)}
+                    className="w-full bg-white rounded-lg border border-slate-300 p-2 text-xs"
+                  />
+                </div>
+              </div>
+              {e.listing_type === "SALE" ? (
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    قیمت کل (تومان)
+                  </label>
+                  <input
+                    type="number"
+                    value={edPriceTotal}
+                    onChange={(ev) => setEdPriceTotal(ev.target.value)}
+                    className="w-full bg-white rounded-lg border border-slate-300 p-2 text-xs font-mono"
+                  />
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      ودیعه (تومان)
+                    </label>
+                    <input
+                      type="number"
+                      value={edDeposit}
+                      onChange={(ev) => setEdDeposit(ev.target.value)}
+                      className="w-full bg-white rounded-lg border border-slate-300 p-2 text-xs font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      اجاره ماهانه (تومان)
+                    </label>
+                    <input
+                      type="number"
+                      value={edRent}
+                      onChange={(ev) => setEdRent(ev.target.value)}
+                      className="w-full bg-white rounded-lg border border-slate-300 p-2 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    تعداد خواب
+                  </label>
+                  <input
+                    type="number"
+                    value={edBedrooms}
+                    onChange={(ev) => setEdBedrooms(ev.target.value)}
+                    className="w-full bg-white rounded-lg border border-slate-300 p-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    طبقه
+                  </label>
+                  <input
+                    type="number"
+                    value={edFloor}
+                    onChange={(ev) => setEdFloor(ev.target.value)}
+                    className="w-full bg-white rounded-lg border border-slate-300 p-2 text-xs"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  توضیحات
+                </label>
+                <textarea
+                  rows={2}
+                  value={edDesc}
+                  onChange={(ev) => setEdDesc(ev.target.value)}
+                  className="w-full bg-white rounded-lg border border-slate-300 p-2 text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="submit"
+                  disabled={savingEdit}
+                  className="flex-1 py-2 rounded-xl bg-emerald-700 text-white font-bold text-xs hover:bg-emerald-800 disabled:opacity-50"
+                >
+                  {savingEdit ? "در حال ذخیره..." : "ذخیره تغییرات ملک"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingProp(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 font-bold text-xs"
+                >
+                  انصراف
+                </button>
+              </div>
+            </form>
+          )}
           {a === "DETAILS" && (
             <div className="space-y-4">
               {s.length > 0 && (
@@ -512,17 +915,56 @@ export const PropertyDetailModal: React.FC<{
               </div>
 
               <div>
-                <h4 className="font-extrabold text-slate-800 mb-2">موقعیت و آدرس:</h4>
+                <h4 className="font-extrabold text-slate-800 mb-2">موقعیت و محله:</h4>
                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-center gap-1.5 font-bold text-slate-800">
                       <MapPin className="w-4 h-4 text-[#145DB5]" />
-                      <span>{e.address.city}</span>
+                      <span className="text-xs font-black text-[#145DB5] bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200">
+                        محله: {currentNeighborhood || "مشخص نشده"}
+                      </span>
                     </div>
-                    <span className="text-xs font-black text-[#145DB5] bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200">
-                      محله:{" "}
-                      {e.address.district || e.address.neighborhood || "مشخص نشده"}
-                    </span>
+                    {currentNeighborhood &&
+                      (A ||
+                        e.assigned_agent_id === k?.id ||
+                        e.created_by_user_id === k?.id) && (
+                        <button
+                          type="button"
+                          disabled={deletingNeighborhood}
+                          onClick={async () => {
+                            if (!scope) return;
+                            setDeletingNeighborhood(true);
+                            try {
+                              const res = await offlineSync.mutate(scope, {
+                                method: "PATCH",
+                                path: `/api/v1/properties/${e.id}`,
+                                body: { neighborhood: null, district: null },
+                                entityType: "PROPERTY",
+                                entityId: e.id,
+                                expectedUpdatedAt: e.updated_at || null,
+                                actionLabel: `حذف محله ملک کد ${e.code}`,
+                              });
+                              if (res.success) {
+                                setCurrentNeighborhood("");
+                                z("محله این ملک حذف شد.");
+                                i();
+                              } else {
+                                z(res.error?.message || "خطا در حذف محله.");
+                              }
+                            } catch {
+                              z("خطا در حذف محله.");
+                            } finally {
+                              setDeletingNeighborhood(false);
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-bold hover:bg-rose-100 disabled:opacity-50 transition cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>
+                            {deletingNeighborhood ? "در حال حذف..." : "حذف محله"}
+                          </span>
+                        </button>
+                      )}
                   </div>
                   {e.address.street && (
                     <p className="text-[11px] text-slate-600 pr-5">
@@ -591,14 +1033,15 @@ export const PropertyDetailModal: React.FC<{
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
-                    { id: "AVAILABLE", label: "فعال و آماده" },
-                    { id: "UNDER_NEGOTIATION", label: "در حال مذاکره" },
+                    { id: "ACTIVE", label: "فعال و آماده" },
+                    { id: "NEGOTIATION", label: "در حال مذاکره" },
                     { id: "RESERVED", label: "رزرو شده" },
                     { id: "ARCHIVED", label: "بایگانی شده" },
                   ].map((st) => (
                     <button
                       key={st.id}
                       type="button"
+                      disabled={Boolean(transitionNotice)}
                       onClick={() => O(st.id)}
                       className={`py-2 px-2 rounded-xl font-bold border transition text-center text-xs flex items-center justify-center gap-1 ${
                         D === st.id
@@ -613,17 +1056,17 @@ export const PropertyDetailModal: React.FC<{
                 </div>
                 <button
                   type="button"
-                  disabled={x || D === w}
+                  disabled={x || Boolean(transitionNotice) || D === w}
                   onClick={de}
                   className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-black shadow-md transition ${
                     D === w
                       ? "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
-                      : "bg-[#145DB5] text-white hover:bg-[#0F4383] active:scale-98 animate-pulse cursor-pointer"
+                      : "bg-[#145DB5] text-white hover:bg-[#0F4383] active:scale-98 cursor-pointer"
                   }`}
                 >
                   <Save className="w-4 h-4" />
                   <span>
-                    {x
+                    {x || transitionNotice
                       ? "در حال ذخیره تغییرات..."
                       : D === w
                       ? "ذخیره تغییرات"
@@ -761,6 +1204,45 @@ export const PropertyDetailModal: React.FC<{
                   )}
                 </div>
               </div>
+              {(A ||
+                e.assigned_agent_id === k?.id ||
+                e.created_by_user_id === k?.id) && (
+                <div className="pt-3 border-t border-slate-200">
+                  {!confirmDeleteProp ? (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteProp(true)}
+                      className="w-full py-2.5 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-xs font-bold hover:bg-rose-100 flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>حذف کامل فایل ملک</span>
+                    </button>
+                  ) : (
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 space-y-2">
+                      <p className="text-[11px] font-bold text-rose-800">
+                        آیا از حذف کامل این فایل مطمئن هستید؟ در حالت آفلاین پس از اتصال اینترنت از سرور نیز حذف می‌شود.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={deletingProp}
+                          onClick={handleDeleteProperty}
+                          className="flex-1 py-2 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 disabled:opacity-50"
+                        >
+                          {deletingProp ? "در حال حذف..." : "تأیید و حذف"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteProp(false)}
+                          className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 text-xs font-bold"
+                        >
+                          انصراف
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

@@ -1,5 +1,74 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../services/apiClient.ts";
+import { getActiveOfflineScope } from "../services/offlineLicense.ts";
+import { offlineSync } from "../services/offlineSync.ts";
+
+function filterOfflineProperties(
+  items: any[],
+  params: {
+    tab: string;
+    search: string;
+    filters: any;
+    branchId?: string;
+    page: number;
+  },
+) {
+  const { tab, search, filters, branchId, page } = params;
+  const tabLower = String(tab || "ACTIVE").toLowerCase();
+  const q = search.trim().toLowerCase();
+
+  let list = items.filter((p) => {
+    const isArch = p.is_archived || p.status === "ARCHIVED";
+    if (tabLower === "active" && isArch) return false;
+    if (tabLower === "archived" && !isArch) return false;
+    if (branchId && branchId !== "ALL" && p.branch_id && p.branch_id !== branchId) {
+      return false;
+    }
+    if (filters.status && filters.status !== "ALL" && p.status !== filters.status) {
+      return false;
+    }
+    if (filters.visibility && filters.visibility !== "ALL" && p.visibility !== filters.visibility) {
+      return false;
+    }
+    if (filters.listingType && filters.listingType !== "ALL" && p.listing_type !== filters.listingType) {
+      return false;
+    }
+    if (filters.propertyType && filters.propertyType !== "ALL" && p.property_type !== filters.propertyType) {
+      return false;
+    }
+    const nName = String(p.address?.district || p.address?.neighborhood || "").trim();
+    if (filters.neighborhood && filters.neighborhood.trim() && nName !== filters.neighborhood.trim()) {
+      return false;
+    }
+    if (filters.minPrice !== "") {
+      const price = p.listing_type === "RENT" ? Number(p.deposit_amount || 0) : Number(p.price_total || 0);
+      if (price < Number(filters.minPrice)) return false;
+    }
+    if (filters.maxPrice !== "") {
+      const price = p.listing_type === "RENT" ? Number(p.deposit_amount || 0) : Number(p.price_total || 0);
+      if (price > Number(filters.maxPrice)) return false;
+    }
+    if (filters.minArea !== "" && Number(p.area_sqm || 0) < Number(filters.minArea)) return false;
+    if (filters.maxArea !== "" && Number(p.area_sqm || 0) > Number(filters.maxArea)) return false;
+    if (filters.bedrooms !== "ALL" && Number(p.bedrooms || 0) < Number(filters.bedrooms)) return false;
+    if (filters.hasParking && !p.has_parking) return false;
+    if (filters.hasElevator && !p.has_elevator) return false;
+    if (filters.hasStorage && !p.has_storage) return false;
+    if (filters.hasBalcony && !p.has_balcony) return false;
+    if (q) {
+      const hay = `${p.code || ""} ${p.title || ""} ${nName} ${p.description || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  list = list.sort((a, b) =>
+    String(b.created_at || "").localeCompare(String(a.created_at || "")),
+  );
+  const total = list.length;
+  const start = (Math.max(1, page) - 1) * 10;
+  return { data: list.slice(start, start + 10), total };
+}
 
 export function usePropertyPage({
   page,
@@ -51,23 +120,91 @@ export function usePropertyPage({
   useEffect(() => {
     let current = true;
     setState((previous) => ({ ...previous, data: [], loading: true, error: "" }));
+
+    const loadOfflineFallback = async () => {
+      try {
+        const scope = await getActiveOfflineScope();
+        if (!scope || !current) return false;
+        const cached = await offlineSync.loadSnapshot<any[]>(
+          scope,
+          "properties",
+          branchId || "ALL",
+        );
+        if (!cached || !current) return false;
+        const filtered = filterOfflineProperties(cached, {
+          tab,
+          search,
+          filters,
+          branchId,
+          page,
+        });
+        const lastPage = Math.max(1, Math.ceil(filtered.total / 10));
+        if (page > lastPage) {
+          setPage(lastPage);
+          return true;
+        }
+        setState({ data: filtered.data, total: filtered.total, loading: false, error: "" });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const offlineEnv = typeof navigator !== "undefined" && !navigator.onLine;
+    if (offlineEnv) {
+      loadOfflineFallback().then((ok) => {
+        if (current && !ok) {
+          setState({
+            data: [],
+            total: 0,
+            loading: false,
+            error: "اطلاعات آفلاین برای املاک یافت نشد.",
+          });
+        }
+      });
+      return () => {
+        current = false;
+      };
+    }
+
     api
       .get(`/api/v1/properties?${queryString}`)
-      .then((response) => {
+      .then(async (response) => {
         if (!current) return;
         if (!response.success) {
+          if (response.status === 0 || response.error?.code === "NETWORK_ERROR") {
+            const ok = await loadOfflineFallback();
+            if (ok) return;
+          }
           throw new Error(response.error?.message || "خطا در دریافت املاک");
         }
-        const total = response.meta?.total ?? response.data.length;
+        let rows = response.data || [];
+        let total = response.meta?.total ?? rows.length;
+        try {
+          const scope = await getActiveOfflineScope();
+          if (scope) {
+            const overlaid = await offlineSync.applyDomainOverlay(scope, "properties", rows);
+            // Adjust for optimistic post/delete if queue items exist
+            const diff = overlaid.length - rows.length;
+            rows = overlaid.filter((p) => {
+              const isArch = p.is_archived || p.status === "ARCHIVED";
+              return tab === "ARCHIVED" ? isArch : !isArch;
+            });
+            total = Math.max(0, total + diff);
+          }
+        } catch {
+          // ignore overlay error
+        }
         const lastPage = Math.max(1, Math.ceil(total / 10));
         if (page > lastPage) {
           setPage(lastPage);
           return;
         }
-        setState({ data: response.data, total, loading: false, error: "" });
+        setState({ data: rows, total, loading: false, error: "" });
       })
-      .catch((error: any) => {
-        if (current) {
+      .catch(async (error: any) => {
+        const ok = await loadOfflineFallback();
+        if (current && !ok) {
           setState({
             data: [],
             total: 0,
@@ -200,10 +337,27 @@ export const PWAInstallCard: React.FC = () => {
 };
 
 export async function getPropertyChoices() {
+  const loadCached = async () => {
+    const scope = await getActiveOfflineScope();
+    if (!scope) return null;
+    return offlineSync.loadSnapshot<any[]>(scope, "properties", "ALL");
+  };
+
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    const cached = await loadCached();
+    if (cached) return { success: true, data: cached };
+  }
+
   const data: any[] = [];
   for (let page = 1; ; page++) {
     const response = await api.get(`/api/v1/properties?status=all&limit=200&page=${page}`);
-    if (!response.success) return response;
+    if (!response.success) {
+      if (response.status === 0 || response.error?.code === "NETWORK_ERROR") {
+        const cached = await loadCached();
+        if (cached) return { success: true, data: cached };
+      }
+      return response;
+    }
     data.push(...response.data);
     if (page >= (response.meta?.total_pages || 1)) return { success: true, data };
   }

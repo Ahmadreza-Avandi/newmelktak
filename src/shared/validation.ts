@@ -10,8 +10,8 @@ export const LoginSchema = z.object({
 export const CreateBranchSchema = z.object({
   name: z.string().trim().min(2, "نام شعبه باید حداقل ۲ کاراکتر باشد"),
   branch_code: z.string().trim().min(2, "کد شعبه باید حداقل ۲ کاراکتر باشد").regex(/^[a-zA-Z0-9_.-]+$/, "کد شعبه فقط می‌تواند شامل حروف انگلیسی، اعداد و خط تیره باشد"),
-  phone: z.string().trim().optional().or(z.literal("")),
-  address: z.string().trim().optional().or(z.literal("")),
+  phone: z.string().trim().optional().nullable().or(z.literal("")),
+  address: z.string().trim().optional().nullable().or(z.literal("")),
   manager_user_id: z.string().uuid("شناسه مدیر نامعتبر است").optional().nullable().or(z.literal("")),
   is_main: z.boolean().default(false),
   status: z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE")
@@ -52,10 +52,10 @@ export const QuickAddPropertySchema = z.object({
   price_total: z.coerce.number().nonnegative().optional(),
   rent_amount: z.coerce.number().nonnegative().optional(),
   deposit_amount: z.coerce.number().nonnegative().optional(),
-  province: z.string().default("تهران"),
-  city: z.string().default("تهران"),
-  district: z.string().optional(),
-  neighborhood: z.string().min(1, "محله ملک الزامی است"),
+  province: z.string().trim().optional().default(""),
+  city: z.string().trim().optional().default(""),
+  district: z.string().trim().optional().nullable(),
+  neighborhood: z.string().trim().optional().default(""),
   bedrooms: z.coerce.number().int().min(0).max(20).optional(),
   floor: z.coerce.number().int().optional(),
   has_parking: z.boolean().default(false),
@@ -76,8 +76,16 @@ export const PropertyStatusSchema = z.enum([
 ]);
 
 export const UpdatePropertySchema = QuickAddPropertySchema.partial().extend({
+  province: z.string().trim().optional().nullable(),
+  city: z.string().trim().optional().nullable(),
+  district: z.string().trim().optional().nullable(),
+  neighborhood: z.string().trim().optional().nullable(),
   status: PropertyStatusSchema.optional(),
   assigned_to_user_id: z.string().uuid().optional()
+});
+
+export const DeleteNeighborhoodSchema = z.object({
+  name: z.string().trim().min(1, "نام محله الزامی است")
 });
 
 export const QuickAddCustomerSchema = z.object({

@@ -8,13 +8,18 @@ import {
   Building2,
   ChevronRight,
   ChevronLeft,
+  Trash2,
+  MapPin,
 } from "lucide-react";
 import {
   DEFAULT_PROPERTY_FILTERS,
   PropertyFilterModal,
   type PropertyFilters,
 } from "../components/modals/PropertyFilterModal.tsx";
+import { api } from "../services/apiClient.ts";
+import { offlineSync } from "../services/offlineSync.ts";
 import { usePropertyPage } from "../utils/crmWorkflows.tsx";
+import { formatCompactPrice } from "../utils/jalaali.ts";
 import { EmptyState } from "../components/common/EmptyState.tsx";
 import { PropertyCard } from "../components/common/PropertyCard.tsx";
 import { PropertyDetailModal } from "../components/modals/PropertyDetailModal.tsx";
@@ -40,15 +45,35 @@ export const PropertiesPage: React.FC<{
   const [u, d] = useState(false);
   const [f, p] = useState<any>(null);
   const [m, h] = useState(1);
+  const [localRefreshTick, setLocalRefreshTick] = useState(0);
+  const [optimisticStatusMap, setOptimisticStatusMap] = useState<
+    Record<string, string>
+  >({});
+  const [statusFeedback, setStatusFeedback] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+  const [pendingDeleteNeighborhood, setPendingDeleteNeighborhood] = useState<string | null>(null);
+  const [deletingNeighborhood, setDeletingNeighborhood] = useState<string | null>(null);
+  const [neighborhoodFeedback, setNeighborhoodFeedback] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   useEffect(() => {
     h(1);
   }, [o, i, c, branchId]);
 
+  useEffect(() => {
+    return offlineSync.subscribe(() => {
+      setLocalRefreshTick((prev) => prev + 1);
+    });
+  }, []);
+
   const g = useMemo(() => {
     const set = new Set<string>();
     e.forEach((prop) => {
-      const nName = prop.address?.district || prop.address?.neighborhood;
+      const nName = (prop.address?.district || prop.address?.neighborhood || "").trim();
       if (nName) set.add(nName);
     });
     return Array.from(set);
@@ -80,15 +105,86 @@ export const PropertiesPage: React.FC<{
     search: i,
     filters: c,
     branchId,
-    refreshKey: e.length,
+    refreshKey: e.length + localRefreshTick,
   });
 
   const y = propertyPage.data;
-  const b = Math.max(1, Math.ceil(propertyPage.total / PROPERTY_PAGE_SIZE));
-  const x = y;
+
+  useEffect(() => {
+    setOptimisticStatusMap((prev) => {
+      const keys = Object.keys(prev);
+      if (keys.length === 0) return prev;
+      let changed = false;
+      const next = { ...prev };
+      for (const id of keys) {
+        const target = next[id];
+        const found = y.find((item) => item.id === id);
+        if (o === "ACTIVE") {
+          if (target === "ARCHIVED" && !found) {
+            delete next[id];
+            changed = true;
+          }
+        } else if (o === "ARCHIVED") {
+          if (target !== "ARCHIVED" && !found) {
+            delete next[id];
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [y, o]);
+
+  const x = useMemo(() => {
+    return y.filter((prop) => {
+      const override = optimisticStatusMap[prop.id];
+      if (!override) return true;
+      return o === "ACTIVE" ? override !== "ARCHIVED" : override === "ARCHIVED";
+    });
+  }, [y, optimisticStatusMap, o]);
+
+  const visibleTotal = Math.max(0, propertyPage.total - (y.length - x.length));
+  const b = Math.max(1, Math.ceil(visibleTotal / PROPERTY_PAGE_SIZE));
   const C = () => {
     l(DEFAULT_PROPERTY_FILTERS);
     a("");
+  };
+
+  const handleDeleteNeighborhood = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed || deletingNeighborhood) return;
+    setDeletingNeighborhood(trimmed);
+    setNeighborhoodFeedback(null);
+    try {
+      const res = await api.delete(
+        `/api/v1/properties/neighborhoods?name=${encodeURIComponent(trimmed)}`
+      );
+      if (res.success) {
+        if (c.neighborhood === trimmed) {
+          l((prev) => ({ ...prev, neighborhood: "" }));
+        }
+        setPendingDeleteNeighborhood(null);
+        setLocalRefreshTick((prev) => prev + 1);
+        r?.();
+        setNeighborhoodFeedback({
+          type: "success",
+          text: `محله «${trimmed}» با موفقیت حذف شد.`,
+        });
+        setTimeout(() => setNeighborhoodFeedback(null), 3500);
+      } else {
+        setNeighborhoodFeedback({
+          type: "error",
+          text: res.error?.message || "خطا در حذف محله.",
+        });
+      }
+    } catch {
+      setNeighborhoodFeedback({
+        type: "error",
+        text: "ارتباط با سرور برای حذف محله برقرار نشد.",
+      });
+    } finally {
+      setDeletingNeighborhood(null);
+    }
   };
 
   return (
@@ -98,8 +194,8 @@ export const PropertiesPage: React.FC<{
           <h2 className="text-base font-extrabold text-[#172033]">فایلینگ و املاک</h2>
           <p className="text-xs text-[#667085]">
             {o === "ACTIVE"
-              ? `فهرست فایل‌های فعال و آماده معامله (${propertyPage.total} فایل)`
-              : `آرشیو پرونده‌های بایگانی‌شده (${propertyPage.total} فایل)`}
+              ? `فهرست فایل‌های فعال و آماده معامله (${visibleTotal} فایل)`
+              : `آرشیو پرونده‌های بایگانی‌شده (${visibleTotal} فایل)`}
           </p>
         </div>
         <button
@@ -196,6 +292,114 @@ export const PropertiesPage: React.FC<{
         ))}
       </div>
 
+      {g.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-2.5 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-bold text-slate-600 flex items-center gap-1">
+              <MapPin className="w-3.5 h-3.5 text-[#145DB5]" />
+              <span>محله‌ها ({g.length})</span>
+            </span>
+            {c.neighborhood && (
+              <button
+                type="button"
+                onClick={() => l({ ...c, neighborhood: "" })}
+                className="text-[11px] font-bold text-[#145DB5] hover:underline"
+              >
+                نمایش همه محله‌ها
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {g.map((nName) => {
+              const isSelected = c.neighborhood === nName;
+              const isPending = pendingDeleteNeighborhood === nName;
+              return (
+                <div
+                  key={nName}
+                  className={`inline-flex items-center rounded-lg border text-[11px] font-semibold overflow-hidden transition ${
+                    isSelected
+                      ? "bg-[#145DB5] text-white border-[#145DB5]"
+                      : isPending
+                      ? "bg-rose-50 text-rose-800 border-rose-500"
+                      : "bg-slate-50 text-slate-700 border-slate-200"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      l({ ...c, neighborhood: isSelected ? "" : nName })
+                    }
+                    className={`px-2.5 py-1 transition cursor-pointer ${
+                      isSelected ? "hover:bg-[#0F4383]" : "hover:bg-slate-100"
+                    }`}
+                  >
+                    {nName}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPendingDeleteNeighborhood(isPending ? null : nName)
+                    }
+                    disabled={deletingNeighborhood === nName}
+                    title={`حذف محله ${nName}`}
+                    aria-label={`حذف محله ${nName}`}
+                    className={`px-1.5 py-1 border-r transition cursor-pointer ${
+                      isSelected
+                        ? "border-blue-300 text-white hover:bg-rose-700"
+                        : "border-slate-200 text-rose-600 hover:bg-rose-100"
+                    }`}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          {pendingDeleteNeighborhood && (
+            <div className="flex items-center justify-between gap-2 bg-rose-50 border border-rose-200 rounded-lg p-2 text-[11px]">
+              <span className="text-rose-800 font-semibold">
+                محله «{pendingDeleteNeighborhood}» از لیست محله‌ها و فایل‌های مرتبط حذف شود؟
+              </span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  disabled={Boolean(deletingNeighborhood)}
+                  onClick={() =>
+                    handleDeleteNeighborhood(pendingDeleteNeighborhood)
+                  }
+                  className="px-2.5 py-1 rounded-md bg-rose-600 text-white font-bold hover:bg-rose-700 disabled:opacity-50 cursor-pointer"
+                >
+                  {deletingNeighborhood ? "در حال حذف..." : "بله، حذف شود"}
+                </button>
+                <button
+                  type="button"
+                  disabled={Boolean(deletingNeighborhood)}
+                  onClick={() => setPendingDeleteNeighborhood(null)}
+                  className="px-2 py-1 rounded-md bg-white border border-slate-200 text-slate-700 font-semibold hover:bg-slate-100 cursor-pointer"
+                >
+                  انصراف
+                </button>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {(neighborhoodFeedback || statusFeedback) && (
+        <div
+          role="status"
+          className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-lg border ${
+            (statusFeedback || neighborhoodFeedback)!.type === "success"
+              ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+              : "bg-rose-50 text-rose-700 border-rose-200"
+          }`}
+        >
+          {(statusFeedback || neighborhoodFeedback)!.text}
+        </div>
+      )}
+
       {v > 0 && (
         <div className="flex items-center gap-1.5 flex-wrap bg-blue-50/70 p-2 rounded-xl border border-blue-100 text-[11px]">
           <span className="font-bold text-[#145DB5]">فیلترهای فعال:</span>
@@ -211,6 +415,22 @@ export const PropertiesPage: React.FC<{
             <span className="bg-white border border-blue-200 text-slate-700 px-2 py-0.5 rounded-md flex items-center gap-1">
               <span>محله: {c.neighborhood}</span>
               <button onClick={() => l({ ...c, neighborhood: "" })}>
+                <X className="w-3 h-3 text-slate-400 hover:text-slate-600" />
+              </button>
+            </span>
+          )}
+          {c.minPrice !== "" && (
+            <span className="bg-white border border-blue-200 text-slate-700 px-2 py-0.5 rounded-md flex items-center gap-1">
+              <span>حداقل قیمت: {formatCompactPrice(Number(c.minPrice))}</span>
+              <button onClick={() => l({ ...c, minPrice: "" })}>
+                <X className="w-3 h-3 text-slate-400 hover:text-slate-600" />
+              </button>
+            </span>
+          )}
+          {c.maxPrice !== "" && (
+            <span className="bg-white border border-blue-200 text-slate-700 px-2 py-0.5 rounded-md flex items-center gap-1">
+              <span>حداکثر قیمت: {formatCompactPrice(Number(c.maxPrice))}</span>
+              <button onClick={() => l({ ...c, maxPrice: "" })}>
                 <X className="w-3 h-3 text-slate-400 hover:text-slate-600" />
               </button>
             </span>
@@ -242,7 +462,7 @@ export const PropertiesPage: React.FC<{
 
       <div className="flex justify-between items-center text-[11px] text-[#667085] px-1 font-medium">
         <span>
-          نمایش {x.length} فایل از مجموع {propertyPage.total} مورد منطبق
+          نمایش {x.length} فایل از مجموع {visibleTotal} مورد منطبق
         </span>
         <span>
           صفحه {m} از {b}
@@ -267,7 +487,7 @@ export const PropertiesPage: React.FC<{
             تلاش مجدد
           </button>
         </div>
-      ) : propertyPage.total === 0 ? (
+      ) : visibleTotal === 0 ? (
         <EmptyState
           icon={o === "ARCHIVED" ? Archive : Building2}
           title={
@@ -295,7 +515,7 @@ export const PropertiesPage: React.FC<{
         </div>
       )}
 
-      {propertyPage.total > PROPERTY_PAGE_SIZE && (
+      {visibleTotal > PROPERTY_PAGE_SIZE && (
         <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 p-2.5 shadow-2xs mt-3">
           <button
             type="button"
@@ -328,6 +548,8 @@ export const PropertiesPage: React.FC<{
         onChange={(nextFilters) => l(nextFilters)}
         onReset={C}
         neighborhoods={g}
+        onDeleteNeighborhood={handleDeleteNeighborhood}
+        deletingNeighborhood={deletingNeighborhood}
       />
 
       {f && (
@@ -336,8 +558,34 @@ export const PropertiesPage: React.FC<{
           customers={t}
           isOpen={!!f}
           onClose={() => p(null)}
-          onRefresh={() => {
+          onStatusChanged={(propertyId, newStatus, propertyTitle) => {
+            setOptimisticStatusMap((prev) => ({
+              ...prev,
+              [propertyId]: newStatus,
+            }));
+            setLocalRefreshTick((prev) => prev + 1);
             if (r) r();
+            setStatusFeedback({
+              type: "success",
+              text:
+                newStatus === "ARCHIVED"
+                  ? `ملک «${propertyTitle}» به بخش بایگانی منتقل و از لیست فعال حذف شد.`
+                  : `وضعیت ملک «${propertyTitle}» با موفقیت به‌روزرسانی شد.`,
+            });
+            window.setTimeout(() => setStatusFeedback(null), 4000);
+          }}
+          onRefresh={() => {
+            setLocalRefreshTick((prev) => prev + 1);
+            if (r) r();
+          }}
+          onDeleted={(_propertyId, propertyTitle) => {
+            setLocalRefreshTick((prev) => prev + 1);
+            if (r) r();
+            setStatusFeedback({
+              type: "success",
+              text: `فایل «${propertyTitle}» حذف شد.`,
+            });
+            window.setTimeout(() => setStatusFeedback(null), 4000);
           }}
         />
       )}

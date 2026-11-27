@@ -369,7 +369,8 @@ export const CreateTransactionModal: React.FC<{
               <option value="">— انتخاب ملک از فهرست فایل‌ها —</option>
               {filteredProperties.map((p) => (
                 <option key={p.id} value={p.id}>
-                  کد {p.code} — {p.title} ({p.neighborhood || p.city}) [
+                  کد {p.code} — {p.title}
+                  {p.neighborhood ? ` (${p.neighborhood})` : ""} [
                   {p.listing_type === "RENT" ? "اجاره" : "فروش"}]
                 </option>
               ))}

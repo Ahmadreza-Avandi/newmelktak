@@ -8,7 +8,8 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { api } from "../../services/apiClient.ts";
+import { useAuth } from "../../context/AuthContext.tsx";
+import { offlineSync } from "../../services/offlineSync.ts";
 import { CurrencyInput } from "../common/CurrencyInput.tsx";
 
 export const CreatePropertyModal: React.FC<{
@@ -16,6 +17,7 @@ export const CreatePropertyModal: React.FC<{
   onClose: () => void;
   onSuccess: (property: any) => void;
 }> = ({ isOpen, onClose, onSuccess }) => {
+  const { user, tenant } = useAuth();
   const [listingType, setListingType] = useState("SALE");
   const [propertyType, setPropertyType] = useState("APARTMENT");
   const [visibility, setVisibility] = useState("AGENCY");
@@ -24,8 +26,7 @@ export const CreatePropertyModal: React.FC<{
   const [priceTotal, setPriceTotal] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
   const [rentAmount, setRentAmount] = useState("");
-  const [neighborhood, setNeighborhood] = useState("گلشهر");
-  const [city, setCity] = useState("کرج");
+  const [neighborhood, setNeighborhood] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [bedrooms, setBedrooms] = useState("2");
   const [floor, setFloor] = useState("2");
@@ -54,24 +55,21 @@ export const CreatePropertyModal: React.FC<{
       setError("متراژ باید بیشتر از صفر باشد.");
       return;
     }
-    if (!neighborhood.trim()) {
-      setError("نام محله یا منطقه الزامی است.");
-      return;
-    }
+    const trimmedNeighborhood = neighborhood.trim();
 
     const payload: any = {
       title:
         title.trim() ||
-        `${
-          propertyType === "APARTMENT" ? "آپارتمان" : "ملک"
-        } ${areaNum} متری ${neighborhood}`,
+        `${propertyType === "APARTMENT" ? "آپارتمان" : "ملک"} ${areaNum} متری${
+          trimmedNeighborhood ? ` ${trimmedNeighborhood}` : ""
+        }`,
       property_type: propertyType,
       listing_type: listingType,
       area_sqm: areaNum,
-      district: neighborhood.trim(),
-      neighborhood: neighborhood.trim(),
-      city: city.trim() || "کرج",
-      province: "البرز",
+      district: trimmedNeighborhood,
+      neighborhood: trimmedNeighborhood,
+      city: "",
+      province: "",
       bedrooms: bedrooms ? Number(bedrooms) : undefined,
       floor: floor ? Number(floor) : undefined,
       has_parking: hasParking,
@@ -96,7 +94,39 @@ export const CreatePropertyModal: React.FC<{
 
     setSubmitting(true);
     try {
-      const res = await api.post("/api/v1/properties", payload);
+      const scope = tenant && user ? { tenantId: tenant.id, userId: user.id } : null;
+      if (!scope) {
+        setError("نشست کاربری معتبر نیست.");
+        return;
+      }
+      const res = await offlineSync.mutate(scope, {
+        method: "POST",
+        path: "/api/v1/properties",
+        body: payload,
+        entityType: "PROPERTY",
+        actionLabel: `ثبت ملک «${payload.title}»`,
+        optimisticBuilder: (tempId) => {
+          const nowIso = new Date().toISOString();
+          return {
+            id: tempId,
+            code: `OFF-${tempId.slice(-4).toUpperCase()}`,
+            ...payload,
+            status: "AVAILABLE",
+            is_archived: false,
+            branch_id: user?.branch_id || null,
+            branch_name: (user as any)?.branch_name || undefined,
+            assigned_agent_id: user?.id,
+            assigned_agent_name: user?.display_name,
+            address: {
+              district: payload.district || "",
+              neighborhood: payload.neighborhood || "",
+            },
+            created_at: nowIso,
+            updated_at: nowIso,
+            _offlinePending: true,
+          };
+        },
+      });
       if (res.success && res.data) {
         onSuccess(res.data);
         onClose();
@@ -104,7 +134,7 @@ export const CreatePropertyModal: React.FC<{
         setError(res.error?.message || "خطا در ثبت ملک در پایگاه داده.");
       }
     } catch {
-      setError("ارتباط با سرور برقرار نشد.");
+      setError("خطا در ثبت اطلاعات ملک.");
     } finally {
       setSubmitting(false);
     }
@@ -252,14 +282,13 @@ export const CreatePropertyModal: React.FC<{
             </div>
             <div>
               <label className="block text-xs font-semibold text-[#667085] mb-1">
-                محله (منطقه) <span className="text-rose-500">*</span>
+                محله (منطقه)
               </label>
               <input
                 type="text"
-                required
                 value={neighborhood}
                 onChange={(e) => setNeighborhood(e.target.value)}
-                placeholder="مثلاً گلشهر"
+                placeholder="مثلاً سعادت‌آباد، گیشا..."
                 className="w-full rounded-lg border border-slate-300 p-2 text-xs text-[#172033] focus:border-[#145DB5] outline-none"
               />
             </div>

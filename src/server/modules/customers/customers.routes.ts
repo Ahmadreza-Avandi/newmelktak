@@ -4,6 +4,11 @@ import { postgresDb } from "../../db/postgres.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { subscriptionEnforcementMiddleware } from "../../middleware/subscription.middleware.js";
 import {
+  idempotencyMiddleware,
+  parseExpectedUpdatedAt,
+  isRecordModifiedSince,
+} from "../../middleware/idempotency.middleware.js";
+import {
   QuickAddCustomerSchema,
   UpdateCustomerSchema,
   CreateCustomerRequirementSchema,
@@ -15,6 +20,7 @@ const customersRouter = Router();
 
 customersRouter.use(authMiddleware);
 customersRouter.use(subscriptionEnforcementMiddleware);
+customersRouter.use(idempotencyMiddleware);
 
 customersRouter.get("/", async (req, res, next) => {
   try {
@@ -115,6 +121,18 @@ customersRouter.patch("/:id", async (req, res, next) => {
       });
     }
 
+    const expectedUpdatedAt = parseExpectedUpdatedAt(req);
+    if (isRecordModifiedSince(existing.updated_at, expectedUpdatedAt)) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: "SYNC_CONFLICT",
+          message: "اطلاعات این متقاضی پیش از همگام‌سازی توسط کاربر دیگری تغییر کرده است.",
+        },
+        data: { server_record: existing },
+      });
+    }
+
     const validated = UpdateCustomerSchema.parse(req.body);
     let branchId = req.body.branch_id;
     if (req.user.role_code === "BRANCH_MANAGER" || req.user.role_code === "AGENT") {
@@ -211,6 +229,32 @@ customersRouter.post("/:id/archive", async (req, res, next) => {
       success: true,
       data: archived,
       message: "پرونده متقاضی با موفقیت بایگانی گردید."
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+customersRouter.delete("/:id", async (req, res, next) => {
+  try {
+    const result = await postgresDb.deleteCustomer(
+      req.tenant.id,
+      req.params.id,
+      req.user.id,
+      req.user.role_code
+    );
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        error: { code: "CUSTOMER_NOT_FOUND", message: "متقاضی مورد نظر یافت نشد یا دسترسی مجاز نیست." }
+      });
+    }
+    return res.json({
+      success: true,
+      data: result,
+      message: result.archived
+        ? "این متقاضی دارای قرارداد فعال است و به بایگانی منتقل شد."
+        : "پرونده متقاضی با موفقیت حذف شد."
     });
   } catch (error) {
     next(error);
@@ -318,7 +362,7 @@ customersRouter.get("/:id/matches", async (req, res, next) => {
         error: { code: "CUSTOMER_NOT_FOUND", message: "متقاضی مورد نظر یافت نشد یا دسترسی مجاز نیست." }
       });
     }
-    const matches = await postgresDb.getCustomerMatches(tenantId, req.params.id);
+    const matches = await postgresDb.getCustomerMatches(tenantId, req.params.id, req.user);
     return res.json({ success: true, data: matches, meta: { total: matches.length } });
   } catch (err) {
     next(err);

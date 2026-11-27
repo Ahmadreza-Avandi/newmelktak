@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   CircleAlert,
   Clock,
@@ -29,14 +29,22 @@ export const HomePage: React.FC<{
   onCompleteTask: i,
   onSelectProperty: a,
 }) => {
-  const {
-    metrics: s,
-    overdueTasks: c,
-    todayTasks: l,
-    upcomingVisits: u,
-    smartMatches: d,
-    recentActivities: f,
-  } = e;
+  const s = e?.metrics || {};
+  const c = Array.isArray(e?.overdueTasks) ? e.overdueTasks : [];
+  const l = Array.isArray(e?.todayTasks) ? e.todayTasks : [];
+  const u = Array.isArray(e?.upcomingVisits) ? e.upcomingVisits : [];
+  const d = Array.isArray(e?.smartMatches) ? e.smartMatches : [];
+  const f = Array.isArray(e?.recentActivities) ? e.recentActivities : [];
+
+  const [showAllOverdue, setShowAllOverdue] = useState(false);
+  const [showAllToday, setShowAllToday] = useState(false);
+  const [showAllVisits, setShowAllVisits] = useState(false);
+  const [showAllActivities, setShowAllActivities] = useState(false);
+
+  const visibleOverdue = showAllOverdue ? c : c.slice(0, 3);
+  const visibleToday = showAllToday ? l : l.slice(0, 3);
+  const visibleVisits = showAllVisits ? u : u.slice(0, 3);
+  const visibleActivities = showAllActivities ? f : f.slice(0, 3);
 
   return (
     <div className="space-y-4 pb-20 select-none">
@@ -172,10 +180,21 @@ export const HomePage: React.FC<{
             </button>
           </div>
           <div className="space-y-2">
-            {c.slice(0, 2).map((task: any) => (
+            {visibleOverdue.map((task: any) => (
               <TaskCard key={task.id} task={task} onComplete={i} />
             ))}
           </div>
+          {c.length > 3 && (
+            <button
+              type="button"
+              onClick={() => setShowAllOverdue((prev) => !prev)}
+              className="mt-2 w-full py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-[#145DB5] transition cursor-pointer"
+            >
+              {showAllOverdue
+                ? "نمایش کمتر"
+                : `بیشتر (${c.length - 3} مورد دیگر)`}
+            </button>
+          )}
         </div>
       )}
 
@@ -183,7 +202,7 @@ export const HomePage: React.FC<{
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-1.5 text-xs font-bold text-[#172033]">
             <Clock className="w-4 h-4 text-[#145DB5]" />
-            <span>کارهای برنامه‌ریزی‌شده امروز</span>
+            <span>کارهای هماهنگ‌شده و پیگیری‌های امروز</span>
           </div>
           <button
             onClick={() => r("tasks")}
@@ -199,9 +218,20 @@ export const HomePage: React.FC<{
           </div>
         ) : (
           <div className="space-y-2">
-            {l.slice(0, 2).map((task: any) => (
+            {visibleToday.map((task: any) => (
               <TaskCard key={task.id} task={task} onComplete={i} />
             ))}
+            {l.length > 3 && (
+              <button
+                type="button"
+                onClick={() => setShowAllToday((prev) => !prev)}
+                className="w-full py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-[#145DB5] transition cursor-pointer"
+              >
+                {showAllToday
+                  ? "نمایش کمتر"
+                  : `بیشتر (${l.length - 3} مورد دیگر)`}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -213,9 +243,16 @@ export const HomePage: React.FC<{
               <Calendar className="w-4 h-4 text-emerald-600" />
               <span>بازدیدهای هماهنگ‌شده</span>
             </div>
+            <button
+              onClick={() => r("tasks")}
+              className="text-[11px] text-[#145DB5] font-semibold flex items-center"
+            >
+              <span>مشاهده همه</span>
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
           </div>
           <div className="space-y-2">
-            {u.map((visit: any) => {
+            {visibleVisits.map((visit: any) => {
               const formattedTime = new Date(visit.scheduled_at).toLocaleString(
                 "fa-IR",
                 {
@@ -254,6 +291,17 @@ export const HomePage: React.FC<{
               );
             })}
           </div>
+          {u.length > 3 && (
+            <button
+              type="button"
+              onClick={() => setShowAllVisits((prev) => !prev)}
+              className="mt-2 w-full py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-[#145DB5] transition cursor-pointer"
+            >
+              {showAllVisits
+                ? "نمایش کمتر"
+                : `بیشتر (${u.length - 3} مورد دیگر)`}
+            </button>
+          )}
         </div>
       )}
 
@@ -308,11 +356,13 @@ export const HomePage: React.FC<{
 
       {f.length > 0 && (
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-3.5 shadow-2xs">
-          <span className="text-xs font-bold text-[#667085] block mb-2">
-            آخرین فعالیت‌ها در سیستم
-          </span>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-[#667085]">
+              آخرین فعالیت‌ها در سیستم
+            </span>
+          </div>
           <div className="space-y-2.5 divide-y divide-slate-100">
-            {f.slice(0, 4).map((act: any) => {
+            {visibleActivities.map((act: any) => {
               const formattedTime = new Date(act.created_at).toLocaleTimeString(
                 "fa-IR",
                 {
@@ -340,6 +390,17 @@ export const HomePage: React.FC<{
               );
             })}
           </div>
+          {f.length > 3 && (
+            <button
+              type="button"
+              onClick={() => setShowAllActivities((prev) => !prev)}
+              className="mt-3 w-full py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-[#145DB5] transition cursor-pointer"
+            >
+              {showAllActivities
+                ? "نمایش کمتر"
+                : `بیشتر (${f.length - 3} مورد دیگر)`}
+            </button>
+          )}
         </div>
       )}
     </div>

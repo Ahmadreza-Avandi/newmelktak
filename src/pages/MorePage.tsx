@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from "react";
 import {
   ArrowLeftRight,
+  Bell,
   Building,
   ChevronLeft,
   CircleCheck,
+  Cloud,
   Database,
   KeyRound,
   LogOut,
@@ -14,6 +16,7 @@ import {
   Smartphone,
   User,
 } from "lucide-react";
+import type { SyncStatusState } from "../services/offlineSync.ts";
 import { api } from "../services/apiClient.ts";
 import { useAuth } from "../context/AuthContext.tsx";
 import {
@@ -39,6 +42,11 @@ export interface MorePageProps {
   onNavigateTab?: (tab: string) => void;
   activeModule?: string;
   onModuleChange: (module: string) => void;
+  unreadNotificationsCount?: number;
+  syncStatus?: SyncStatusState | null;
+  isOfflineMode?: boolean;
+  onOpenNotifications?: () => void;
+  onOpenSyncModal?: () => void;
 }
 
 export const MorePage: React.FC<MorePageProps> = ({
@@ -47,6 +55,11 @@ export const MorePage: React.FC<MorePageProps> = ({
   onNavigateTab,
   activeModule = "hub",
   onModuleChange,
+  unreadNotificationsCount = 0,
+  syncStatus,
+  isOfflineMode = false,
+  onOpenNotifications,
+  onOpenSyncModal,
 }) => {
   const { user, tenant, logout, refreshAuth } = useAuth();
   const [health, setHealth] = useState<any>(null);
@@ -117,6 +130,10 @@ export const MorePage: React.FC<MorePageProps> = ({
   }, [user, tenant]);
 
   useEffect(() => {
+    if (isOfflineMode || (typeof navigator !== "undefined" && !navigator.onLine)) {
+      setHealth({ status: "offline" });
+      return;
+    }
     api
       .get("/api/v1/health")
       .then((res) => {
@@ -146,7 +163,7 @@ export const MorePage: React.FC<MorePageProps> = ({
           })
           .catch(() => {});
       });
-  }, []);
+  }, [isOfflineMode]);
 
   const handleSaveProfile = async (ev: React.FormEvent) => {
     ev.preventDefault();
@@ -505,6 +522,60 @@ export const MorePage: React.FC<MorePageProps> = ({
           تنظیمات و ابزارهای سامانه
         </span>
         <div className="space-y-2">
+          {(onOpenNotifications || onOpenSyncModal) && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {onOpenNotifications && (
+                <button
+                  type="button"
+                  onClick={onOpenNotifications}
+                  className="bg-white rounded-2xl border border-[#E2E8F0] p-4 shadow-2xs text-right hover:border-[#145DB5] transition cursor-pointer flex items-center justify-between gap-2"
+                >
+                  <div>
+                    <div className="flex items-center gap-2 text-xs font-bold text-[#172033]">
+                      <Bell className="w-4 h-4 text-[#145DB5]" />
+                      <span>مرکز اعلان‌ها و پوش‌نوتیفیکیشن</span>
+                    </div>
+                    <p className="text-[11px] text-[#667085] mt-1">
+                      تنظیم یادآور ۲ ساعته، بازدیدها و دریافت اعلان اندروید
+                    </p>
+                  </div>
+                  {unreadNotificationsCount > 0 && (
+                    <span className="bg-rose-600 text-white rounded-full text-[10px] font-black px-2 py-0.5 shrink-0">
+                      {unreadNotificationsCount}
+                    </span>
+                  )}
+                </button>
+              )}
+              {onOpenSyncModal && (
+                <button
+                  type="button"
+                  onClick={onOpenSyncModal}
+                  className="bg-white rounded-2xl border border-[#E2E8F0] p-4 shadow-2xs text-right hover:border-[#145DB5] transition cursor-pointer flex items-center justify-between gap-2"
+                >
+                  <div>
+                    <div className="flex items-center gap-2 text-xs font-bold text-[#172033]">
+                      <Cloud className="w-4 h-4 text-[#145DB5]" />
+                      <span>حافظه آفلاین و صف همگام‌سازی</span>
+                    </div>
+                    <p className="text-[11px] text-[#667085] mt-1">
+                      مشاهده تغییرات در انتظار، موفق، ناموفق و رفع تعارض‌ها
+                    </p>
+                  </div>
+                  {(syncStatus?.pendingCount || 0) +
+                    (syncStatus?.failedCount || 0) +
+                    (syncStatus?.conflictCount || 0) >
+                    0 && (
+                    <span className="bg-amber-600 text-white rounded-full text-[10px] font-black px-2 py-0.5 shrink-0">
+                      {(syncStatus?.pendingCount || 0) +
+                        (syncStatus?.failedCount || 0) +
+                        (syncStatus?.conflictCount || 0)}
+                    </span>
+                  )}
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="bg-white rounded-2xl border border-[#E2E8F0] p-4 shadow-2xs">
             <div className="flex items-center justify-between mb-1.5">
               <div className="flex items-center gap-2">
@@ -547,13 +618,17 @@ export const MorePage: React.FC<MorePageProps> = ({
                   <CircleCheck className="w-3 h-3" />
                   متصل و فعال
                 </span>
+              ) : health?.status === "offline" || isOfflineMode ? (
+                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                  کار در حالت آفلاین (داده کش‌شده)
+                </span>
               ) : (
                 <span className="text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded">
                   در حال بررسی
                 </span>
               )}
             </div>
-            {health && (
+            {health && health.status !== "offline" && (
               <div className="bg-[#F7F9FC] rounded-xl p-2.5 font-mono text-[10px] text-slate-700 space-y-1">
                 <div className="flex items-center gap-1">
                   <Database className="w-3.5 h-3.5 text-[#145DB5]" />

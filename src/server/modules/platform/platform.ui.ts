@@ -154,6 +154,9 @@ platformUiRouter.get(["/", "/dashboard"], async (req: Request, res: Response, ne
       </div>
 
       <div class="flex items-center gap-3">
+        <a href="/db-admin" class="text-xs bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 py-1.5 px-3 rounded-lg transition font-semibold">
+          مدیریت دیتابیس (SQL)
+        </a>
         <div id="admin-info" class="text-left hidden sm:block">
           <span id="admin-name" class="text-xs font-bold text-slate-200 block">...</span>
           <span class="text-[10px] text-slate-400">مدیر کلان سیستم</span>
@@ -343,6 +346,122 @@ platformUiRouter.get(["/", "/dashboard"], async (req: Request, res: Response, ne
         </table>
       </div>
     </div>
+
+    <!-- System Logs & Error Reporting Section -->
+    <section id="system-logs-section" class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+      <div class="p-4 sm:p-6 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 class="text-base font-bold text-white flex items-center gap-2">
+            <span>گزارش خطاها و لاگ‌های سیستم</span>
+            <span class="text-[10px] font-mono bg-slate-800 text-amber-400 border border-slate-700 px-2 py-0.5 rounded-full">System Logs</span>
+          </h3>
+          <p class="text-xs text-slate-400 mt-0.5">پایش متمرکز خطاهای سرور، دیتابیس، احراز هویت، فایل‌ها و عملیات پشتیبان‌گیری (با پوشاندن خودکار اطلاعات حساس)</p>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span id="logs-retention-badge" class="text-[10px] bg-slate-950 text-slate-300 border border-slate-700 px-2.5 py-1 rounded-lg">نگهداری: ۳۰ روز</span>
+          <button type="button" id="logs-refresh-btn" class="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-700 transition cursor-pointer flex items-center gap-1.5">
+            <span>بروزرسانی</span>
+          </button>
+          <button type="button" id="logs-delete-all-btn" class="bg-rose-950/70 hover:bg-rose-900 disabled:opacity-40 disabled:cursor-not-allowed text-rose-300 text-xs font-bold px-3 py-1.5 rounded-lg border border-rose-800/60 transition cursor-pointer flex items-center gap-1.5">
+            <span>حذف همه</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Filter Controls -->
+      <form id="logs-filter-form" class="p-4 bg-slate-950/60 border-b border-slate-800 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5 text-xs">
+        <div class="lg:col-span-3">
+          <label for="logs-search" class="block text-[10px] text-slate-400 mb-1">جست‌وجو در پیام / Request ID / مسیر</label>
+          <input type="text" id="logs-search" placeholder="متن خطا، شناسه درخواست یا مسیر API..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-500 focus:outline-none">
+        </div>
+        <div class="lg:col-span-2">
+          <label for="logs-level" class="block text-[10px] text-slate-400 mb-1">سطح لاگ</label>
+          <select id="logs-level" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-white focus:border-amber-500 focus:outline-none">
+            <option value="ALL">همه سطوح</option>
+            <option value="ERROR">ERROR (خطا)</option>
+            <option value="WARN">WARN (هشدار)</option>
+            <option value="INFO">INFO (اطلاع)</option>
+            <option value="DEBUG">DEBUG (اشکال‌زدایی)</option>
+          </select>
+        </div>
+        <div class="lg:col-span-2">
+          <label for="logs-module" class="block text-[10px] text-slate-400 mb-1">ماژول / سرویس</label>
+          <select id="logs-module" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-white focus:border-amber-500 focus:outline-none">
+            <option value="ALL">همه ماژول‌ها</option>
+          </select>
+        </div>
+        <div class="lg:col-span-2">
+          <label for="logs-from-btn" class="block text-[10px] text-slate-400 mb-1">از تاریخ (شمسی)</label>
+          <input type="hidden" id="logs-from" value="">
+          <div class="relative flex items-center">
+            <button type="button" id="logs-from-btn" class="w-full bg-slate-900 border border-slate-700 hover:border-amber-500/70 rounded-lg px-2.5 py-2 text-right text-slate-300 focus:border-amber-500 focus:outline-none flex items-center justify-between gap-1.5 cursor-pointer">
+              <span id="logs-from-label" class="truncate text-[11px]">انتخاب تاریخ...</span>
+              <svg class="w-3.5 h-3.5 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+            </button>
+            <button type="button" id="logs-from-clear" class="hidden absolute left-7 text-slate-400 hover:text-rose-300 px-1 text-[11px] cursor-pointer" title="پاک کردن تاریخ شروع">✕</button>
+          </div>
+        </div>
+        <div class="lg:col-span-3">
+          <label for="logs-to-btn" class="block text-[10px] text-slate-400 mb-1">تا تاریخ (شمسی)</label>
+          <div class="flex gap-1.5">
+            <input type="hidden" id="logs-to" value="">
+            <div class="relative flex-1 min-w-0 flex items-center">
+              <button type="button" id="logs-to-btn" class="w-full bg-slate-900 border border-slate-700 hover:border-amber-500/70 rounded-lg px-2.5 py-2 text-right text-slate-300 focus:border-amber-500 focus:outline-none flex items-center justify-between gap-1.5 cursor-pointer">
+                <span id="logs-to-label" class="truncate text-[11px]">انتخاب تاریخ...</span>
+                <svg class="w-3.5 h-3.5 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+              </button>
+              <button type="button" id="logs-to-clear" class="hidden absolute left-7 text-slate-400 hover:text-rose-300 px-1 text-[11px] cursor-pointer" title="پاک کردن تاریخ پایان">✕</button>
+            </div>
+            <button type="submit" class="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3 py-2 rounded-lg transition cursor-pointer shrink-0">اعمال</button>
+            <button type="button" id="logs-reset-btn" class="bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold px-2.5 py-2 rounded-lg border border-slate-700 transition cursor-pointer shrink-0" title="پاک کردن فیلترها">✕</button>
+          </div>
+        </div>
+      </form>
+
+      <!-- States: Loading / Error / Empty -->
+      <div id="logs-loading" class="hidden p-8 text-center text-xs text-slate-400">
+        <div class="inline-block w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin mb-2"></div>
+        <p>در حال دریافت لاگ‌های سیستم...</p>
+      </div>
+
+      <div id="logs-error" class="hidden m-4 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center justify-between gap-3">
+        <span id="logs-error-text">خطا در دریافت لاگ‌های سیستم.</span>
+        <button type="button" id="logs-retry-btn" class="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-1.5 rounded-lg cursor-pointer shrink-0">تلاش مجدد</button>
+      </div>
+
+      <div id="logs-empty" class="hidden p-8 text-center text-xs text-slate-400">
+        هیچ رویداد یا خطایی مطابق فیلترهای انتخابی یافت نشد.
+      </div>
+
+      <!-- Logs Table -->
+      <div id="logs-table-wrap" class="overflow-x-auto">
+        <table class="w-full text-right text-xs">
+          <thead class="bg-slate-950 text-slate-400 border-b border-slate-800">
+            <tr>
+              <th class="p-3">زمان</th>
+              <th class="p-3">سطح</th>
+              <th class="p-3">ماژول / عملیات</th>
+              <th class="p-3">پیام</th>
+              <th class="p-3">مسیر / وضعیت</th>
+              <th class="p-3">Request ID</th>
+              <th class="p-3 text-center">عملیات</th>
+            </tr>
+          </thead>
+          <tbody id="logs-tbody" class="divide-y divide-slate-800/70 text-slate-200">
+            <tr><td colspan="7" class="p-6 text-center text-slate-500">در حال بارگذاری...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Server-side Pagination Bar -->
+      <div id="logs-pagination" class="p-3.5 bg-slate-950/60 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+        <span id="logs-page-summary">صفحه ۱ از ۱ (۰ رکورد)</span>
+        <div class="flex items-center gap-2">
+          <button type="button" id="logs-prev-btn" disabled class="bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 text-slate-200 font-semibold px-3 py-1.5 rounded-lg border border-slate-700 transition cursor-pointer">قبلی</button>
+          <button type="button" id="logs-next-btn" disabled class="bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 text-slate-200 font-semibold px-3 py-1.5 rounded-lg border border-slate-700 transition cursor-pointer">بعدی</button>
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- Modals -->
@@ -752,6 +871,65 @@ platformUiRouter.get(["/", "/dashboard"], async (req: Request, res: Response, ne
     </div>
   </div>
 
+  <!-- System Log Detail Modal -->
+  <div id="system-log-detail-modal" class="hidden fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div>
+          <h3 class="text-sm font-bold text-white">جزئیات رویداد سیستم</h3>
+          <p id="log-det-id" class="text-[11px] font-mono text-amber-400 mt-0.5">...</p>
+        </div>
+        <button type="button" data-action="close-log-detail" class="text-slate-400 hover:text-white p-1 text-base cursor-pointer">✕</button>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+        <div><span class="text-slate-400">زمان (ISO): </span><span id="log-det-time" class="font-mono text-slate-200" dir="ltr">...</span></div>
+        <div><span class="text-slate-400">سطح: </span><span id="log-det-level" class="font-bold">...</span></div>
+        <div><span class="text-slate-400">ماژول / عملیات: </span><span id="log-det-mod" class="font-mono text-slate-200" dir="ltr">...</span></div>
+        <div><span class="text-slate-400">Request ID: </span><span id="log-det-reqid" class="font-mono text-amber-300" dir="ltr">...</span></div>
+        <div><span class="text-slate-400">مسیر HTTP: </span><span id="log-det-route" class="font-mono text-slate-200" dir="ltr">...</span></div>
+        <div><span class="text-slate-400">وضعیت / تاخیر: </span><span id="log-det-status" class="font-mono text-slate-200" dir="ltr">...</span></div>
+        <div><span class="text-slate-400">User ID: </span><span id="log-det-user" class="font-mono text-slate-300" dir="ltr">...</span></div>
+        <div><span class="text-slate-400">Tenant ID: </span><span id="log-det-tenant" class="font-mono text-slate-300" dir="ltr">...</span></div>
+      </div>
+      <div class="space-y-1.5 text-xs">
+        <div class="text-slate-400 font-semibold">پیام رویداد:</div>
+        <div id="log-det-message" class="bg-slate-950 border border-slate-800 rounded-xl p-3 text-slate-100 leading-relaxed break-words"></div>
+      </div>
+      <div class="space-y-1.5 text-xs">
+        <div class="text-slate-400 font-semibold">جزئیات فنی (فیلدهای حساس پوشانده شده‌اند):</div>
+        <pre id="log-det-details" dir="ltr" class="bg-slate-950 border border-slate-800 rounded-xl p-3 text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap"></pre>
+      </div>
+      <div id="log-det-stack-wrap" class="hidden space-y-1.5 text-xs">
+        <div class="text-rose-400 font-semibold">Stack Trace:</div>
+        <pre id="log-det-stack" dir="ltr" class="bg-slate-950 border border-rose-500/30 rounded-xl p-3 text-[11px] font-mono text-rose-200 overflow-x-auto whitespace-pre-wrap max-h-60"></pre>
+      </div>
+      <div class="flex items-center justify-between gap-2 pt-1">
+        <button type="button" id="log-det-delete-btn" class="bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-800/60 font-bold px-4 py-2 rounded-xl text-xs cursor-pointer transition">حذف این لاگ</button>
+        <button type="button" data-action="close-log-detail" class="bg-slate-800 hover:bg-slate-700 text-white font-semibold px-4 py-2 rounded-xl text-xs cursor-pointer">بستن</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Persian (Jalali) Date Picker Popover -->
+  <div id="jalali-picker-popover" class="hidden fixed z-[90] w-72 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-3 text-xs text-slate-100 select-none">
+    <div class="flex items-center justify-between gap-1.5 pb-2.5 border-b border-slate-800">
+      <button type="button" id="jp-prev-month" class="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center justify-center cursor-pointer" title="ماه قبل">›</button>
+      <div class="flex items-center gap-1.5 flex-1">
+        <select id="jp-month-select" class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-[11px] font-bold text-white focus:border-amber-500 focus:outline-none"></select>
+        <select id="jp-year-select" class="w-20 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-[11px] font-bold text-amber-300 focus:border-amber-500 focus:outline-none"></select>
+      </div>
+      <button type="button" id="jp-next-month" class="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center justify-center cursor-pointer" title="ماه بعد">‹</button>
+    </div>
+    <div class="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 py-2">
+      <span>ش</span><span>ی</span><span>د</span><span>س</span><span>چ</span><span>پ</span><span class="text-rose-400">ج</span>
+    </div>
+    <div id="jp-days-grid" class="grid grid-cols-7 gap-1 text-center"></div>
+    <div class="flex items-center justify-between gap-2 pt-2.5 mt-2.5 border-t border-slate-800">
+      <button type="button" id="jp-today-btn" class="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-bold text-[11px] cursor-pointer">امروز</button>
+      <button type="button" id="jp-clear-btn" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-semibold text-[11px] cursor-pointer">پاک کردن</button>
+    </div>
+  </div>
+
   <!-- Toast Notifications Container -->
   <div id="toast-container" class="fixed top-5 left-5 z-[100] flex flex-col gap-2 max-w-sm pointer-events-none"></div>
 
@@ -838,6 +1016,15 @@ platformUiRouter.get(["/", "/dashboard"], async (req: Request, res: Response, ne
       });
     }
 
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     async function init() {
       try { localStorage.removeItem('amlak_platform_token'); } catch(e){}
       try { sessionStorage.removeItem('amlak_platform_token'); } catch(e){}
@@ -853,6 +1040,7 @@ platformUiRouter.get(["/", "/dashboard"], async (req: Request, res: Response, ne
         await loadTenants();
         await checkCurrentSupport();
         await loadAuditLogs();
+        await loadSystemLogs(1);
       } catch (err) {
         console.warn('Init non-fatal error:', err);
         showToast('خطا در بررسی نشست یا دریافت اطلاعات پلتفرم. اتصال سرور را بررسی کنید.', 'error');
@@ -1526,6 +1714,566 @@ platformUiRouter.get(["/", "/dashboard"], async (req: Request, res: Response, ne
       }
     }
 
+    // --- Persian (Jalaali) Calendar Utilities (Tehran Timezone) ---
+    const J_BREAKS = [-61, 9, 38, 199, 426, 686, 756, 818, 1111, 1181, 1210, 1635, 2060, 2097, 2192, 2262, 2324, 2394, 2456, 3178];
+    const J_MONTHS = [
+      { id: 1, name: 'فروردین' }, { id: 2, name: 'اردیبهشت' }, { id: 3, name: 'خرداد' },
+      { id: 4, name: 'تیر' }, { id: 5, name: 'مرداد' }, { id: 6, name: 'شهریور' },
+      { id: 7, name: 'مهر' }, { id: 8, name: 'آبان' }, { id: 9, name: 'آذر' },
+      { id: 10, name: 'دی' }, { id: 11, name: 'بهمن' }, { id: 12, name: 'اسفند' }
+    ];
+    function jDiv(a, b) { return ~~(a / b); }
+    function jMod(a, b) { return a - ~~(a / b) * b; }
+    function jalCalLeap(r, i) {
+      let n = i;
+      if (r - i < 6) n = i - r + jDiv(r + 4, 33) * 33;
+      let res = jMod(jMod(n + 1, 33) - 1, 4);
+      if (res === -1) res = 4;
+      return res;
+    }
+    function jalCal(jy) {
+      const gy = jy + 621;
+      let leapJ = -14;
+      let jp = J_BREAKS[0];
+      let jm = 0;
+      let jump = 0;
+      for (let i = 1; i < J_BREAKS.length; i += 1) {
+        jm = J_BREAKS[i];
+        jump = jm - jp;
+        if (jy < jm) break;
+        leapJ = leapJ + jDiv(jump, 33) * 8 + jDiv(jMod(jump, 33), 4);
+        jp = jm;
+      }
+      const n = jy - jp;
+      leapJ = leapJ + jDiv(n, 33) * 8 + jDiv(jMod(n, 33) + 3, 4);
+      if (jMod(jump, 33) === 4 && jump - n === 4) leapJ += 1;
+      const leapG = jDiv(gy, 4) - jDiv((jDiv(gy, 100) + 1) * 3, 4) - 150;
+      const march = 20 + leapJ - leapG;
+      return { gy, march, jump, n };
+    }
+    function isLeapJalaali(jy) {
+      let jp = J_BREAKS[0], jm = 0, jump = 0;
+      for (let i = 1; i < J_BREAKS.length; i += 1) {
+        jm = J_BREAKS[i];
+        jump = jm - jp;
+        if (jy < jm) break;
+        jp = jm;
+      }
+      return jalCalLeap(jump, jy - jp) === 0;
+    }
+    function daysInJalaaliMonth(jy, jm) {
+      if (jm <= 6) return 31;
+      if (jm <= 11) return 30;
+      return isLeapJalaali(jy) ? 30 : 29;
+    }
+    function g2d(gy, gm, gd) {
+      let d = jDiv((gy + jDiv(gm - 8, 6) + 100100) * 1461, 4) + jDiv(153 * jMod(gm + 9, 12) + 2, 5) + gd - 34840408;
+      return d - jDiv(jDiv(gy + 100100 + jDiv(gm - 8, 6), 100) * 3, 4) + 752;
+    }
+    function d2g(jdn) {
+      let j = 4 * jdn + 139361631;
+      j = j + jDiv(jDiv(4 * jdn + 183187720, 146097) * 3, 4) * 4 - 3908;
+      const i = jDiv(jMod(j, 1461), 4) * 5 + 308;
+      const gd = jDiv(jMod(i, 153), 5) + 1;
+      const gm = jMod(jDiv(i, 153), 12) + 1;
+      const gy = jDiv(j, 1461) - 100100 + jDiv(8 - gm, 6);
+      return { gy, gm, gd };
+    }
+    function j2d(jy, jm, jd) {
+      const r = jalCal(jy);
+      return g2d(r.gy, 3, r.march) + (jm - 1) * 31 - jDiv(jm, 7) * (jm - 7) + jd - 1;
+    }
+    function d2j(jdn) {
+      const gy = d2g(jdn).gy;
+      let jy = gy - 621;
+      const r = jalCal(jy);
+      const jdn1f = g2d(r.gy, 3, r.march);
+      let k = jdn - jdn1f;
+      if (k >= 0) {
+        if (k <= 185) return { jy, jm: 1 + jDiv(k, 31), jd: jMod(k, 31) + 1 };
+        k -= 186;
+      } else {
+        jy -= 1;
+        k += 179;
+        if (jalCalLeap(jalCal(jy).jump, jalCal(jy).n) === 1) k += 1;
+      }
+      return { jy, jm: 7 + jDiv(k, 30), jd: jMod(k, 30) + 1 };
+    }
+    function toJalaali(gy, gm, gd) { return d2j(g2d(gy, gm, gd)); }
+    function toGregorian(jy, jm, jd) { return d2g(j2d(jy, jm, jd)); }
+    function getTodayJalaali() {
+      const now = new Date();
+      const tehranDate = new Date(now.getTime() + 12600000);
+      return toJalaali(tehranDate.getUTCFullYear(), tehranDate.getUTCMonth() + 1, tehranDate.getUTCDate());
+    }
+    function jalaaliDayBoundIso(jy, jm, jd, isEndOfDay) {
+      const g = toGregorian(jy, jm, jd);
+      const utcMs = isEndOfDay
+        ? Date.UTC(g.gy, g.gm - 1, g.gd, 23, 59, 59, 999) - 12600000
+        : Date.UTC(g.gy, g.gm - 1, g.gd, 0, 0, 0, 0) - 12600000;
+      return new Date(utcMs).toISOString();
+    }
+    function toFaDigits(v) {
+      const map = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+      return String(v).replace(/\\d/g, d => map[Number(d)]);
+    }
+    function formatJalaaliLabel(jy, jm, jd) {
+      const p = n => String(n).padStart(2, '0');
+      return toFaDigits(jy + '/' + p(jm) + '/' + p(jd));
+    }
+
+    const jalaliPickerState = {
+      activeTarget: null, // 'from' | 'to'
+      viewYear: getTodayJalaali().jy,
+      viewMonth: getTodayJalaali().jm,
+      selected: { from: null, to: null }
+    };
+
+    function applyJalaliSelection(target, jDate) {
+      const inputEl = document.getElementById(target === 'from' ? 'logs-from' : 'logs-to');
+      const labelEl = document.getElementById(target === 'from' ? 'logs-from-label' : 'logs-to-label');
+      const clearEl = document.getElementById(target === 'from' ? 'logs-from-clear' : 'logs-to-clear');
+      jalaliPickerState.selected[target] = jDate;
+      if (jDate) {
+        if (inputEl) inputEl.value = jalaaliDayBoundIso(jDate.jy, jDate.jm, jDate.jd, target === 'to');
+        if (labelEl) {
+          labelEl.innerText = formatJalaaliLabel(jDate.jy, jDate.jm, jDate.jd);
+          labelEl.classList.remove('text-slate-300');
+          labelEl.classList.add('text-amber-300', 'font-bold');
+        }
+        clearEl?.classList.remove('hidden');
+      } else {
+        if (inputEl) inputEl.value = '';
+        if (labelEl) {
+          labelEl.innerText = 'انتخاب تاریخ...';
+          labelEl.classList.remove('text-amber-300', 'font-bold');
+          labelEl.classList.add('text-slate-300');
+        }
+        clearEl?.classList.add('hidden');
+      }
+    }
+
+    function renderJalaliCalendar() {
+      const monthSel = document.getElementById('jp-month-select');
+      const yearSel = document.getElementById('jp-year-select');
+      const grid = document.getElementById('jp-days-grid');
+      if (!monthSel || !yearSel || !grid) return;
+
+      const today = getTodayJalaali();
+      monthSel.innerHTML = J_MONTHS.map(m => '<option value="' + m.id + '"' + (m.id === jalaliPickerState.viewMonth ? ' selected' : '') + '>' + m.name + '</option>').join('');
+      const years = [];
+      for (let y = today.jy - 5; y <= today.jy + 1; y += 1) years.push(y);
+      yearSel.innerHTML = years.map(y => '<option value="' + y + '"' + (y === jalaliPickerState.viewYear ? ' selected' : '') + '>' + toFaDigits(y) + '</option>').join('');
+
+      const firstG = toGregorian(jalaliPickerState.viewYear, jalaliPickerState.viewMonth, 1);
+      const startWeekday = (new Date(Date.UTC(firstG.gy, firstG.gm - 1, firstG.gd)).getUTCDay() + 1) % 7;
+      const totalDays = daysInJalaaliMonth(jalaliPickerState.viewYear, jalaliPickerState.viewMonth);
+      const activeSel = jalaliPickerState.activeTarget ? jalaliPickerState.selected[jalaliPickerState.activeTarget] : null;
+
+      let cellsHtml = '';
+      for (let i = 0; i < startWeekday; i += 1) {
+        cellsHtml += '<div></div>';
+      }
+      for (let d = 1; d <= totalDays; d += 1) {
+        const isToday = jalaliPickerState.viewYear === today.jy && jalaliPickerState.viewMonth === today.jm && d === today.jd;
+        const isSelected = activeSel && jalaliPickerState.viewYear === activeSel.jy && jalaliPickerState.viewMonth === activeSel.jm && d === activeSel.jd;
+        const cls = isSelected
+          ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
+          : isToday
+          ? 'bg-slate-800 text-amber-300 border border-amber-500/60 font-bold hover:bg-slate-700'
+          : 'text-slate-200 hover:bg-slate-800';
+        cellsHtml += '<button type="button" data-jp-day="' + d + '" class="h-8 rounded-lg text-[11px] transition cursor-pointer ' + cls + '">' + toFaDigits(d) + '</button>';
+      }
+      grid.innerHTML = cellsHtml;
+    }
+
+    function openJalaliPicker(target, triggerEl) {
+      const popover = document.getElementById('jalali-picker-popover');
+      if (!popover || !triggerEl) return;
+      if (jalaliPickerState.activeTarget === target && !popover.classList.contains('hidden')) {
+        closeJalaliPicker();
+        return;
+      }
+      jalaliPickerState.activeTarget = target;
+      const base = jalaliPickerState.selected[target] || getTodayJalaali();
+      jalaliPickerState.viewYear = base.jy;
+      jalaliPickerState.viewMonth = base.jm;
+      renderJalaliCalendar();
+      popover.classList.remove('hidden');
+
+      const rect = triggerEl.getBoundingClientRect();
+      const popWidth = 288;
+      const popHeight = popover.offsetHeight || 290;
+      let left = rect.right - popWidth;
+      if (left < 8) left = 8;
+      if (left + popWidth > window.innerWidth - 8) left = Math.max(8, window.innerWidth - popWidth - 8);
+      let top = rect.bottom + 6;
+      if (top + popHeight > window.innerHeight - 8) {
+        top = Math.max(8, rect.top - popHeight - 6);
+      }
+      popover.style.left = left + 'px';
+      popover.style.top = top + 'px';
+    }
+
+    function closeJalaliPicker() {
+      document.getElementById('jalali-picker-popover')?.classList.add('hidden');
+      jalaliPickerState.activeTarget = null;
+    }
+
+    document.getElementById('logs-from-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openJalaliPicker('from', e.currentTarget);
+    });
+    document.getElementById('logs-to-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openJalaliPicker('to', e.currentTarget);
+    });
+    document.getElementById('logs-from-clear')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      applyJalaliSelection('from', null);
+      closeJalaliPicker();
+      loadSystemLogs(1);
+    });
+    document.getElementById('logs-to-clear')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      applyJalaliSelection('to', null);
+      closeJalaliPicker();
+      loadSystemLogs(1);
+    });
+    document.getElementById('jp-month-select')?.addEventListener('change', (e) => {
+      jalaliPickerState.viewMonth = Number(e.target.value) || 1;
+      renderJalaliCalendar();
+    });
+    document.getElementById('jp-year-select')?.addEventListener('change', (e) => {
+      jalaliPickerState.viewYear = Number(e.target.value) || getTodayJalaali().jy;
+      renderJalaliCalendar();
+    });
+    document.getElementById('jp-prev-month')?.addEventListener('click', () => {
+      if (jalaliPickerState.viewMonth === 1) {
+        jalaliPickerState.viewMonth = 12;
+        jalaliPickerState.viewYear -= 1;
+      } else {
+        jalaliPickerState.viewMonth -= 1;
+      }
+      renderJalaliCalendar();
+    });
+    document.getElementById('jp-next-month')?.addEventListener('click', () => {
+      if (jalaliPickerState.viewMonth === 12) {
+        jalaliPickerState.viewMonth = 1;
+        jalaliPickerState.viewYear += 1;
+      } else {
+        jalaliPickerState.viewMonth += 1;
+      }
+      renderJalaliCalendar();
+    });
+    document.getElementById('jp-days-grid')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-jp-day]');
+      if (!btn || !jalaliPickerState.activeTarget) return;
+      const day = Number(btn.getAttribute('data-jp-day'));
+      applyJalaliSelection(jalaliPickerState.activeTarget, {
+        jy: jalaliPickerState.viewYear,
+        jm: jalaliPickerState.viewMonth,
+        jd: day
+      });
+      closeJalaliPicker();
+    });
+    document.getElementById('jp-today-btn')?.addEventListener('click', () => {
+      if (!jalaliPickerState.activeTarget) return;
+      applyJalaliSelection(jalaliPickerState.activeTarget, getTodayJalaali());
+      closeJalaliPicker();
+    });
+    document.getElementById('jp-clear-btn')?.addEventListener('click', () => {
+      if (!jalaliPickerState.activeTarget) return;
+      applyJalaliSelection(jalaliPickerState.activeTarget, null);
+      closeJalaliPicker();
+    });
+    document.addEventListener('click', (e) => {
+      const popover = document.getElementById('jalali-picker-popover');
+      if (!popover || popover.classList.contains('hidden')) return;
+      if (popover.contains(e.target) || e.target.closest('#logs-from-btn') || e.target.closest('#logs-to-btn')) return;
+      closeJalaliPicker();
+    });
+
+    // --- System Logs Viewer & Filters ---
+    const systemLogsState = {
+      page: 1,
+      pageSize: 20,
+      totalPages: 1,
+      totalCount: 0,
+      activeDetailId: null,
+      itemsMap: {}
+    };
+
+    function getLevelBadgeHtml(level) {
+      const lvl = String(level || 'INFO').toUpperCase();
+      if (lvl === 'ERROR') {
+        return '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">ERROR</span>';
+      }
+      if (lvl === 'WARN') {
+        return '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">WARN</span>';
+      }
+      if (lvl === 'DEBUG') {
+        return '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-700 text-slate-300 border border-slate-600">DEBUG</span>';
+      }
+      return '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">INFO</span>';
+    }
+
+    async function loadSystemLogs(targetPage) {
+      const page = Math.max(1, Number(targetPage || systemLogsState.page || 1));
+      systemLogsState.page = page;
+
+      const loadingEl = document.getElementById('logs-loading');
+      const errorEl = document.getElementById('logs-error');
+      const errorTextEl = document.getElementById('logs-error-text');
+      const emptyEl = document.getElementById('logs-empty');
+      const tableWrapEl = document.getElementById('logs-table-wrap');
+      const tbody = document.getElementById('logs-tbody');
+      const prevBtn = document.getElementById('logs-prev-btn');
+      const nextBtn = document.getElementById('logs-next-btn');
+      const deleteAllBtn = document.getElementById('logs-delete-all-btn');
+      const summaryEl = document.getElementById('logs-page-summary');
+
+      errorEl?.classList.add('hidden');
+      emptyEl?.classList.add('hidden');
+      loadingEl?.classList.remove('hidden');
+      tableWrapEl?.classList.add('hidden');
+
+      try {
+        const params = new URLSearchParams();
+        params.set('page', String(page));
+        params.set('pageSize', String(systemLogsState.pageSize));
+
+        const searchVal = document.getElementById('logs-search')?.value?.trim() || '';
+        const levelVal = document.getElementById('logs-level')?.value || 'ALL';
+        const moduleVal = document.getElementById('logs-module')?.value || 'ALL';
+        const fromVal = document.getElementById('logs-from')?.value || '';
+        const toVal = document.getElementById('logs-to')?.value || '';
+
+        if (searchVal) params.set('search', searchVal);
+        if (levelVal && levelVal !== 'ALL') params.set('level', levelVal);
+        if (moduleVal && moduleVal !== 'ALL') params.set('module', moduleVal);
+        if (fromVal) params.set('from', fromVal);
+        if (toVal) params.set('to', toVal);
+
+        const res = await apiFetch('/api/v1/platform/logs?' + params.toString());
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload.success || !payload.data) {
+          throw new Error(payload.error?.message || 'خطا در دریافت اطلاعات لاگ‌ها از سرور');
+        }
+
+        const data = payload.data;
+        const items = Array.isArray(data.items) ? data.items : [];
+        const pagination = data.pagination || { page: 1, totalPages: 1, total: items.length };
+        systemLogsState.totalPages = pagination.totalPages || 1;
+        systemLogsState.totalCount = Number(pagination.total || 0);
+        systemLogsState.itemsMap = {};
+
+        if (deleteAllBtn) {
+          deleteAllBtn.disabled = systemLogsState.totalCount === 0 && items.length === 0;
+        }
+
+        // Update retention badge
+        const badge = document.getElementById('logs-retention-badge');
+        if (badge && data.retention) {
+          badge.innerText = 'نگهداری: ' + data.retention.retentionDays + ' روز / سقف ' + Number(data.retention.maxDbRows).toLocaleString('fa-IR') + ' رکورد';
+        }
+
+        // Populate module dropdown preserving selection
+        const modSel = document.getElementById('logs-module');
+        if (modSel && Array.isArray(data.modules)) {
+          const curMod = modSel.value || 'ALL';
+          modSel.innerHTML = '<option value="ALL">همه ماژول‌ها</option>' +
+            data.modules.map(m => '<option value="' + escapeHtml(m) + '">' + escapeHtml(m) + '</option>').join('');
+          if (curMod && Array.from(modSel.options).some(o => o.value === curMod)) {
+            modSel.value = curMod;
+          }
+        }
+
+        loadingEl?.classList.add('hidden');
+
+        if (items.length === 0) {
+          emptyEl?.classList.remove('hidden');
+          if (tbody) tbody.innerHTML = '';
+        } else {
+          tableWrapEl?.classList.remove('hidden');
+          tbody.innerHTML = items.map(item => {
+            systemLogsState.itemsMap[item.id] = item;
+            const dt = item.timestamp ? new Date(item.timestamp) : null;
+            const faTime = dt && Number.isFinite(dt.getTime()) ? dt.toLocaleString('fa-IR') : '-';
+            const routeText = [item.method, item.route].filter(Boolean).join(' ');
+            const statusPart = item.status != null ? String(item.status) : '-';
+            const durPart = item.durationMs != null ? item.durationMs + 'ms' : '';
+            return \`
+              <tr class="hover:bg-slate-800/40 transition">
+                <td class="p-3 text-slate-300 whitespace-nowrap" title="\${escapeHtml(item.timestamp || '')}">\${escapeHtml(faTime)}</td>
+                <td class="p-3 whitespace-nowrap">\${getLevelBadgeHtml(item.level)}</td>
+                <td class="p-3 whitespace-nowrap">
+                  <div class="font-mono text-amber-300 font-semibold">\${escapeHtml(item.module)}</div>
+                  <div class="text-[10px] font-mono text-slate-400">\${escapeHtml(item.operation)}</div>
+                </td>
+                <td class="p-3 max-w-xs truncate text-slate-100" title="\${escapeHtml(item.message)}">\${escapeHtml(item.message)}</td>
+                <td class="p-3 font-mono text-[11px] text-slate-300 whitespace-nowrap" dir="ltr">
+                  <div>\${escapeHtml(routeText || '-')}</div>
+                  <div class="text-[10px] text-slate-400">\${escapeHtml(statusPart)} \${escapeHtml(durPart)}</div>
+                </td>
+                <td class="p-3 font-mono text-[10px] text-slate-400 whitespace-nowrap" dir="ltr">\${escapeHtml(item.requestId || '-')}</td>
+                <td class="p-3 text-center whitespace-nowrap">
+                  <div class="inline-flex items-center gap-1.5">
+                    <button type="button" data-action="view-log-detail" data-id="\${escapeHtml(item.id)}" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 text-[11px] font-semibold cursor-pointer">
+                      جزئیات
+                    </button>
+                    <button type="button" data-action="delete-log" data-id="\${escapeHtml(item.id)}" class="px-2.5 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-800/60 text-[11px] font-semibold cursor-pointer">
+                      حذف
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            \`;
+          }).join('');
+        }
+
+        if (summaryEl) {
+          summaryEl.innerText = 'صفحه ' + pagination.page + ' از ' + pagination.totalPages + ' (مجموع ' + pagination.total + ' رکورد)';
+        }
+        if (prevBtn) prevBtn.disabled = pagination.page <= 1;
+        if (nextBtn) nextBtn.disabled = pagination.page >= pagination.totalPages;
+      } catch (err) {
+        loadingEl?.classList.add('hidden');
+        if (errorTextEl) errorTextEl.innerText = err?.message || 'خطا در دریافت لاگ‌های سیستم.';
+        errorEl?.classList.remove('hidden');
+      }
+    }
+
+    function openLogDetailModal(id) {
+      const item = systemLogsState.itemsMap[id];
+      if (!item) return;
+      systemLogsState.activeDetailId = id;
+      const dt = item.timestamp ? new Date(item.timestamp) : null;
+      const faTime = dt && Number.isFinite(dt.getTime()) ? dt.toLocaleString('fa-IR') : '-';
+      document.getElementById('log-det-id').innerText = item.id || '-';
+      document.getElementById('log-det-time').innerText = faTime + (item.timestamp ? ' (' + item.timestamp + ')' : '');
+      document.getElementById('log-det-level').innerText = item.level || '-';
+      document.getElementById('log-det-mod').innerText = (item.module || '-') + ' / ' + (item.operation || '-');
+      document.getElementById('log-det-reqid').innerText = item.requestId || '-';
+      document.getElementById('log-det-route').innerText = [item.method, item.route].filter(Boolean).join(' ') || '-';
+      document.getElementById('log-det-status').innerText = (item.status != null ? item.status : '-') + (item.durationMs != null ? ' (' + item.durationMs + 'ms)' : '');
+      document.getElementById('log-det-user').innerText = item.userId || '-';
+      document.getElementById('log-det-tenant').innerText = item.tenantId || '-';
+      document.getElementById('log-det-message').innerText = item.message || '-';
+      document.getElementById('log-det-details').innerText = item.details ? JSON.stringify(item.details, null, 2) : '{}';
+
+      const stackWrap = document.getElementById('log-det-stack-wrap');
+      const stackEl = document.getElementById('log-det-stack');
+      if (item.stack) {
+        stackEl.innerText = item.stack;
+        stackWrap.classList.remove('hidden');
+      } else {
+        stackEl.innerText = '';
+        stackWrap.classList.add('hidden');
+      }
+      document.getElementById('system-log-detail-modal')?.classList.remove('hidden');
+    }
+
+    function closeLogDetailModal() {
+      systemLogsState.activeDetailId = null;
+      document.getElementById('system-log-detail-modal')?.classList.add('hidden');
+    }
+
+    function confirmDeleteSingleLog(id) {
+      if (!id) return;
+      const item = systemLogsState.itemsMap[id];
+      showConfirmModal({
+        title: 'حذف رکورد لاگ سیستم',
+        subtitle: 'حذف دائمی رویداد ثبت‌شده',
+        message: 'آیا از حذف این رکورد لاگ اطمینان دارید؟' + (item?.message ? '\\nپیام: ' + item.message : ''),
+        confirmText: 'بله، حذف شود',
+        danger: true,
+        onConfirm: async () => {
+          try {
+            const res = await apiFetch('/api/v1/platform/logs/' + encodeURIComponent(id), {
+              method: 'DELETE'
+            });
+            const payload = await res.json().catch(() => ({}));
+            if (res.ok && payload.success) {
+              if (systemLogsState.activeDetailId === id) {
+                closeLogDetailModal();
+              }
+              showToast(payload.message || 'لاگ مورد نظر با موفقیت حذف شد.', 'success');
+              const remainingOnPage = Object.keys(systemLogsState.itemsMap).length - 1;
+              const nextPage = remainingOnPage <= 0 && systemLogsState.page > 1 ? systemLogsState.page - 1 : systemLogsState.page;
+              await loadSystemLogs(nextPage);
+            } else {
+              showToast(payload.error?.message || 'خطا در حذف لاگ.', 'error');
+            }
+          } catch (err) {
+            showToast('خطای ارتباط با سرور در هنگام حذف لاگ.', 'error');
+          }
+        }
+      });
+    }
+
+    function confirmDeleteAllLogs() {
+      showConfirmModal({
+        title: 'حذف همه لاگ‌های سیستم',
+        subtitle: 'پاکسازی کامل جدول گزارش خطاها و رویدادها',
+        message: 'آیا از حذف دائمی تمامی لاگ‌های سیستم اطمینان دارید؟\\nپس از تایید، کلیه رکوردهای لاگ سیستم پاک خواهند شد و این عملیات قابل بازگشت نیست.',
+        confirmText: 'بله، همه حذف شوند',
+        danger: true,
+        onConfirm: async () => {
+          const btn = document.getElementById('logs-delete-all-btn');
+          if (btn) btn.disabled = true;
+          try {
+            const res = await apiFetch('/api/v1/platform/logs', {
+              method: 'DELETE'
+            });
+            const payload = await res.json().catch(() => ({}));
+            if (res.ok && payload.success) {
+              closeLogDetailModal();
+              showToast(payload.message || 'تمامی لاگ‌های سیستم حذف شدند.', 'success');
+            } else {
+              showToast(payload.error?.message || 'خطا در حذف همه لاگ‌ها.', 'error');
+            }
+          } catch (err) {
+            showToast('خطای ارتباط با سرور در حذف همه لاگ‌ها.', 'error');
+          } finally {
+            await loadSystemLogs(1);
+          }
+        }
+      });
+    }
+
+    document.getElementById('log-det-delete-btn')?.addEventListener('click', () => {
+      if (systemLogsState.activeDetailId) {
+        confirmDeleteSingleLog(systemLogsState.activeDetailId);
+      }
+    });
+    document.getElementById('logs-delete-all-btn')?.addEventListener('click', confirmDeleteAllLogs);
+
+    document.getElementById('logs-filter-form')?.addEventListener('submit', function(e) {
+      e.preventDefault();
+      closeJalaliPicker();
+      loadSystemLogs(1);
+    });
+    document.getElementById('logs-level')?.addEventListener('change', () => loadSystemLogs(1));
+    document.getElementById('logs-module')?.addEventListener('change', () => loadSystemLogs(1));
+    document.getElementById('logs-refresh-btn')?.addEventListener('click', () => loadSystemLogs(systemLogsState.page));
+    document.getElementById('logs-retry-btn')?.addEventListener('click', () => loadSystemLogs(systemLogsState.page));
+    document.getElementById('logs-reset-btn')?.addEventListener('click', () => {
+      document.getElementById('logs-search').value = '';
+      document.getElementById('logs-level').value = 'ALL';
+      document.getElementById('logs-module').value = 'ALL';
+      applyJalaliSelection('from', null);
+      applyJalaliSelection('to', null);
+      closeJalaliPicker();
+      loadSystemLogs(1);
+    });
+    document.getElementById('logs-prev-btn')?.addEventListener('click', () => {
+      if (systemLogsState.page > 1) loadSystemLogs(systemLogsState.page - 1);
+    });
+    document.getElementById('logs-next-btn')?.addEventListener('click', () => {
+      if (systemLogsState.page < systemLogsState.totalPages) loadSystemLogs(systemLogsState.page + 1);
+    });
+
     // Expose all functions globally on window for inline handlers
     window.openNewTenantModal = openNewTenantModal;
     window.closeNewTenantModal = closeNewTenantModal;
@@ -1549,6 +2297,8 @@ platformUiRouter.get(["/", "/dashboard"], async (req: Request, res: Response, ne
     window.showToast = showToast;
     window.showConfirmModal = showConfirmModal;
     window.closeConfirmModal = closeConfirmModal;
+    window.openLogDetailModal = openLogDetailModal;
+    window.closeLogDetailModal = closeLogDetailModal;
 
     // Direct event listeners
     document.getElementById('confirm-cancel-btn')?.addEventListener('click', closeConfirmModal);
@@ -1610,6 +2360,12 @@ platformUiRouter.get(["/", "/dashboard"], async (req: Request, res: Response, ne
         exportAllTenantsBackup();
       } else if (action === 'close-confirm') {
         closeConfirmModal();
+      } else if (action === 'view-log-detail') {
+        openLogDetailModal(id);
+      } else if (action === 'delete-log') {
+        confirmDeleteSingleLog(id);
+      } else if (action === 'close-log-detail') {
+        closeLogDetailModal();
       } else if (action === 'generate-random-pass') {
         const targetInput = btn.getAttribute('data-target');
         generateRandomPass(targetInput);
@@ -1620,7 +2376,7 @@ platformUiRouter.get(["/", "/dashboard"], async (req: Request, res: Response, ne
     });
 
     // Close modals on clicking backdrop
-    ['new-tenant-modal', 'tenant-success-modal', 'edit-manager-modal', 'delete-tenant-modal', 'sub-modal', 'support-modal', 'import-modal', 'confirm-modal'].forEach(function(modalId) {
+    ['new-tenant-modal', 'tenant-success-modal', 'edit-manager-modal', 'delete-tenant-modal', 'sub-modal', 'support-modal', 'import-modal', 'confirm-modal', 'system-log-detail-modal'].forEach(function(modalId) {
       const el = document.getElementById(modalId);
       if (el) {
         el.addEventListener('click', function(e) {

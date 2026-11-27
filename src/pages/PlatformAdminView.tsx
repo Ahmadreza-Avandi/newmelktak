@@ -566,9 +566,9 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
                     onChange={(ev) => setPlanCode(ev.target.value)}
                     className="w-full bg-slate-50 px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-hidden"
                   >
-                    <option value="ENTERPRISE_PRO">سازمانی نامحدود</option>
-                    <option value="PROFESSIONAL">حرفه‌ای (۳ شعبه)</option>
-                    <option value="STARTER">پایه (۱ شعبه)</option>
+                    <option value="ENTERPRISE_PRO">پیشرفته (۵ شعبه به بالا • ۸ مشاور به بالا)</option>
+                    <option value="PROFESSIONAL">حرفه‌ای (۳ شعبه • ۵ مشاور)</option>
+                    <option value="STARTER">پایه (۱ شعبه • ۳ مشاور)</option>
                   </select>
                 </div>
                 <div>
@@ -671,22 +671,22 @@ export const PlatformAdminView: React.FC<PlatformAdminViewProps> = ({
                     setSubPlanCode(val);
                     if (val === "STARTER") {
                       setMaxBranches(1);
-                      setMaxAgents(5);
+                      setMaxAgents(3);
                     } else if (val === "PROFESSIONAL") {
                       setMaxBranches(3);
-                      setMaxAgents(15);
+                      setMaxAgents(5);
                     } else {
                       setMaxBranches(10);
-                      setMaxAgents(50);
+                      setMaxAgents(20);
                     }
                   }}
                   className="w-full bg-slate-50 px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-hidden"
                 >
                   <option value="ENTERPRISE_PRO">
-                    سازمانی پیشرفته (ENTERPRISE_PRO)
+                    پلن پیشرفته (۵ شعبه به بالا • ۸ مشاور به بالا)
                   </option>
-                  <option value="PROFESSIONAL">حرفه‌ای (PROFESSIONAL)</option>
-                  <option value="STARTER">پایه (STARTER)</option>
+                  <option value="PROFESSIONAL">پلن حرفه‌ای (۳ شعبه • ۵ مشاور)</option>
+                  <option value="STARTER">پلن پایه (۱ شعبه • ۳ مشاور)</option>
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-2">

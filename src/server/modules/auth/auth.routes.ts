@@ -10,10 +10,15 @@ import {
 import { authMiddleware } from "../../middleware/auth.middleware.js";
 import { authRateLimiter } from "../../middleware/rate-limit.middleware.js";
 import { normalizeDigits } from "../../../shared/normalization.js";
+import { logger } from "../../logging/logger.js";
+import { resolveRequestId } from "../../middleware/request-logger.middleware.js";
+import { subscriptionEnforcementMiddleware } from "../../middleware/subscription.middleware.js";
+import { issueOfflineLicense } from "../../services/offline-license.service.js";
 
 const authRouter = Router();
 
 authRouter.post("/login", authRateLimiter(), async (req, res, next) => {
+  const requestId = resolveRequestId(req);
   try {
     const validated = LoginSchema.parse(req.body);
     const agencyCode = normalizeDigits(validated.agency_code || "")
@@ -21,6 +26,15 @@ authRouter.post("/login", authRateLimiter(), async (req, res, next) => {
       .toUpperCase();
 
     if (!agencyCode) {
+      logger.warn("Login rejected: empty agency code", {
+        module: "auth",
+        operation: "login_failed",
+        requestId,
+        method: req.method,
+        route: "/api/v1/auth/login",
+        status: 401,
+        details: { reason: "EMPTY_AGENCY_CODE" },
+      });
       return res.status(401).json({
         success: false,
         error: {
@@ -32,6 +46,15 @@ authRouter.post("/login", authRateLimiter(), async (req, res, next) => {
 
     const tenant = await postgresDb.getTenantByAgencyCode(agencyCode);
     if (!tenant) {
+      logger.warn("Login rejected: unknown agency code", {
+        module: "auth",
+        operation: "login_failed",
+        requestId,
+        method: req.method,
+        route: "/api/v1/auth/login",
+        status: 401,
+        details: { agencyCode, reason: "TENANT_NOT_FOUND" },
+      });
       return res.status(401).json({
         success: false,
         error: {
@@ -53,6 +76,16 @@ authRouter.post("/login", authRateLimiter(), async (req, res, next) => {
         "TENANT",
         tenant.id,
       );
+      logger.warn("Login blocked: agency suspended", {
+        module: "auth",
+        operation: "login_blocked_suspended",
+        requestId,
+        method: req.method,
+        route: "/api/v1/auth/login",
+        status: 403,
+        tenantId: tenant.id,
+        details: { agencyCode },
+      });
       return res.status(403).json({
         success: false,
         error: {
@@ -79,6 +112,16 @@ authRouter.post("/login", authRateLimiter(), async (req, res, next) => {
         "TENANT",
         tenant.id,
       );
+      logger.warn("Login blocked: subscription expired", {
+        module: "auth",
+        operation: "login_blocked_expired",
+        requestId,
+        method: req.method,
+        route: "/api/v1/auth/login",
+        status: 402,
+        tenantId: tenant.id,
+        details: { agencyCode },
+      });
       return res.status(402).json({
         success: false,
         error: {
@@ -110,6 +153,16 @@ authRouter.post("/login", authRateLimiter(), async (req, res, next) => {
         "USER",
         null,
       );
+      logger.warn("Login failed: user not found", {
+        module: "auth",
+        operation: "login_failed",
+        requestId,
+        method: req.method,
+        route: "/api/v1/auth/login",
+        status: 401,
+        tenantId: tenant.id,
+        details: { agencyCode, username: cleanUser, reason: "USER_NOT_FOUND" },
+      });
       return res.status(401).json({
         success: false,
         error: {
@@ -127,6 +180,16 @@ authRouter.post("/login", authRateLimiter(), async (req, res, next) => {
         "USER",
         user.id,
       );
+      logger.warn("Login blocked: inactive user account", {
+        module: "auth",
+        operation: "login_blocked_inactive",
+        requestId,
+        method: req.method,
+        route: "/api/v1/auth/login",
+        status: 403,
+        userId: user.id,
+        tenantId: tenant.id,
+      });
       return res.status(403).json({
         success: false,
         error: {
@@ -152,6 +215,17 @@ authRouter.post("/login", authRateLimiter(), async (req, res, next) => {
         "USER",
         user.id,
       );
+      logger.warn("Login failed: invalid password", {
+        module: "auth",
+        operation: "login_failed",
+        requestId,
+        method: req.method,
+        route: "/api/v1/auth/login",
+        status: 401,
+        userId: user.id,
+        tenantId: tenant.id,
+        details: { agencyCode, reason: "INVALID_PASSWORD" },
+      });
       return res.status(401).json({
         success: false,
         error: {
@@ -187,10 +261,22 @@ authRouter.post("/login", authRateLimiter(), async (req, res, next) => {
       "USER",
       user.id,
     );
+    logger.info("User logged in successfully", {
+      module: "auth",
+      operation: "login_success",
+      requestId,
+      method: req.method,
+      route: "/api/v1/auth/login",
+      status: 200,
+      userId: user.id,
+      tenantId: tenant.id,
+      details: { agencyCode, role: user.role_code },
+    });
     const { password_hash, ...safeUser } = user;
+    const offline_license = await issueOfflineLicense(safeUser, tenant).catch(() => null);
     return res.json({
       success: true,
-      data: { token: rawToken, user: safeUser, tenant },
+      data: { token: rawToken, user: safeUser, tenant, offline_license },
     });
   } catch (error) {
     next(error);
@@ -198,6 +284,7 @@ authRouter.post("/login", authRateLimiter(), async (req, res, next) => {
 });
 
 authRouter.post("/logout", async (req, res, next) => {
+  const requestId = resolveRequestId(req);
   try {
     let token = req.cookies?.amlak_session;
     if (!token && req.headers.authorization?.startsWith("Bearer ")) {
@@ -212,6 +299,14 @@ authRouter.post("/logout", async (req, res, next) => {
       httpOnly: true,
       secure: isHttps,
       sameSite: "lax",
+    });
+    logger.info("User session logged out", {
+      module: "auth",
+      operation: "logout",
+      requestId,
+      method: req.method,
+      route: "/api/v1/auth/logout",
+      status: 200,
     });
     return res.json({
       success: true,
@@ -306,15 +401,29 @@ authRouter.get("/session", async (req, res) => {
     }
 
     const { password_hash, ...safeUser } = user;
+    const offline_license = await issueOfflineLicense(safeUser, tenant).catch(() => null);
     return res.json({
       success: true,
-      data: { authenticated: true, user: safeUser, tenant },
+      data: { authenticated: true, user: safeUser, tenant, offline_license },
     });
   } catch {
     return res.json({
       success: true,
       data: { authenticated: false, user: null, tenant: null },
     });
+  }
+});
+
+authRouter.get("/offline-license", authMiddleware, subscriptionEnforcementMiddleware, async (req, res, next) => {
+  try {
+    const { password_hash, ...safeUser } = req.user;
+    const offline_license = await issueOfflineLicense(safeUser, req.tenant);
+    return res.json({
+      success: true,
+      data: { offline_license, server_now_ms: Date.now() },
+    });
+  } catch (error) {
+    next(error);
   }
 });
 

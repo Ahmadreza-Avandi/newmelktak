@@ -53,6 +53,11 @@ export const CustomerCard: React.FC<{
                 <span>سراسری</span>
               </span>
             )}
+            {customer._offlinePending && (
+              <span className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded">
+                در انتظار همگام‌سازی
+              </span>
+            )}
           </div>
         </div>
       </div>

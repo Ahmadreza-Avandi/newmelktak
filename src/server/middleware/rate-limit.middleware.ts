@@ -1,5 +1,7 @@
 // @ts-nocheck
 import { Request, Response, NextFunction } from "express";
+import { logger } from "../logging/logger.js";
+import { resolveRequestId } from "./request-logger.middleware.js";
 
 interface RateRecord {
   count: number;
@@ -33,16 +35,27 @@ export function authRateLimiter(options = { maxAttempts: 5, maxIpAttempts: 20, w
     const ipKey = `auth_ip:${ip}`;
     const userKey = username ? `auth_user:${ip}:${username}` : null;
     const now = Date.now();
+    const requestId = resolveRequestId(req);
+    const routePath = `${req.baseUrl || ""}${req.path || ""}`;
 
     // Check IP-wide spray limit
     const ipRecord = attempts.get(ipKey);
     if (ipRecord && ipRecord.count >= maxIpAttempts && now <= ipRecord.resetAt) {
       const remainingMinutes = Math.ceil((ipRecord.resetAt - now) / 60000);
+      logger.warn("Authentication rate limit triggered by IP", {
+        module: "auth",
+        operation: "rate_limited_ip",
+        requestId,
+        method: req.method,
+        route: routePath,
+        status: 429,
+        details: { remainingMinutes },
+      });
       return res.status(429).json({
         success: false,
         error: {
           code: "RATE_LIMITED",
-          message: `تعداد تلاش‌های ناموفق از این آدرس بیش از حد مجاز است. لطفاً ${remainingMinutes} دقیقه دیگر دوباره تلاش کنید.`
+          message: `تعداد درخواست‌ها یا تلاش‌های ناموفق از این آدرس بیش از حد مجاز است. لطفاً ${remainingMinutes} دقیقه دیگر دوباره تلاش کنید.`
         }
       });
     }
@@ -52,6 +65,15 @@ export function authRateLimiter(options = { maxAttempts: 5, maxIpAttempts: 20, w
       const userRecord = attempts.get(userKey);
       if (userRecord && userRecord.count >= maxAttempts && now <= userRecord.resetAt) {
         const remainingMinutes = Math.ceil((userRecord.resetAt - now) / 60000);
+        logger.warn("Authentication rate limit triggered for user", {
+          module: "auth",
+          operation: "rate_limited_user",
+          requestId,
+          method: req.method,
+          route: routePath,
+          status: 429,
+          details: { username, remainingMinutes },
+        });
         return res.status(429).json({
           success: false,
           error: {

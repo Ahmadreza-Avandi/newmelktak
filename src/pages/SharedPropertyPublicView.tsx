@@ -271,7 +271,7 @@ export const SharedPropertyPublicView: React.FC<
             <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex justify-between">
               <span className="text-slate-500">محدوده:</span>
               <span className="font-bold text-slate-800">
-                {property.neighborhood || property.city}
+                {property.neighborhood || "ثبت نشده"}
               </span>
             </div>
           </div>
